@@ -1,0 +1,27 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+repositories { mavenCentral() }
+
+dependencies {
+    implementation platform('io.javalin:javalin-bom:7.2.3')
+    implementation 'io.javalin:javalin'
+    implementation 'org.slf4j:slf4j-simple:2.0.16'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.2'
+}
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(21) }
+}
+
+application {
+    mainClass = 'com.desktopfriends.server'
+}
+
+tasks.jar {
+    manifest { attributes 'Main-Class': application.mainClass }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
+}

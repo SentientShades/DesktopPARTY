@@ -1,0 +1,28 @@
+directories:
+  output: dist
+  buildResources: build
+appId: com.desktopfriends.app
+productName: DesktopPARTY!
+files:
+  - filter:
+      - js/**/*
+      - html/**/*
+      - css/**/*
+      - assets/**/*
+      - vendor/**/*
+      - package.json
+extraResources:
+  - from: bin
+    to: bin
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: assets/appicon_512x512.ico
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: DesktopPARTY!
+electronVersion: 43.4.1

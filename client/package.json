@@ -1,0 +1,61 @@
+{
+  "name": "DesktopPARTY!",
+  "version": "0.2.45",
+  "description": "DesktopPARTY!",
+  "main": "js/main.js",
+  "author": "SENTI",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^43.4.1",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "@nut-tree-fork/nut-js": "^4.2.6",
+    "matter-js": "^0.20.0",
+    "uiohook-napi": "^1.5.5",
+    "ws": "^8.18.0"
+  },
+  "build": {
+    "appId": "com.desktopfriends.app",
+    "productName": "DesktopPARTY!",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "js/**/*",
+      "html/**/*",
+      "css/**/*",
+      "assets/**/*",
+      "vendor/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "bin",
+        "to": "bin"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/appicon_512x512.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "DesktopPARTY!"
+    }
+  }
+}

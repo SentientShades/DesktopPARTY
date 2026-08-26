@@ -1,0 +1,38 @@
+{
+  "name": "uiohook-napi",
+  "version": "1.5.5",
+  "author": {
+    "name": "Alexander Drozdov"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SnosMe/uiohook-napi.git"
+  },
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "binding.gyp",
+    "libuiohook/src",
+    "libuiohook/include",
+    "src/lib",
+    "prebuilds"
+  ],
+  "devDependencies": {
+    "@types/node": "^18.19.130",
+    "prebuildify": "^6.0.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "node-gyp-build": "^4.8.4"
+  },
+  "prebuild": {
+    "test": "dist/prebuild-test-noop.js"
+  },
+  "gypfile": true,
+  "engines": {
+    "node": ">= 16"
+  }
+}
