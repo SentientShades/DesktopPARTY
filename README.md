@@ -4,6 +4,8 @@
 
 app i made to practice networking n stuff (used some ai on html and css but everything else i wrote ok dont kill me)
 
+---
+
 DesktopPARTY! is an app that lets you connect (or host) a party on everyones desktop! all without the need for stinky traditional port forwarding, or paying for a server using stun/ice!!
 
 send your friends a party code, and join up in a discord call
@@ -12,7 +14,7 @@ everybodies cursors are visible, control a little customizable dude, draw, or ju
 
 ---
 
-## libraries needed to build source code
+## build requirements ⌄⌄⌄⌄⌄
 
 ![Node](https://img.shields.io/badge/Node-20-339933?logo=node.js&logoColor=white)
 
