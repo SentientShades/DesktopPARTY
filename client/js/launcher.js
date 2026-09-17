@@ -157,12 +157,11 @@ async function refresh() {
   pick('me-name').textContent = p.displayName || p.userid;
   pick('display-name').value = p.displayName || '';
 
-  if (p.avatar) {
-    pick('me-avatar').style.backgroundImage = `url('${p.avatar}')`;
-    pick('avatar-preview').style.backgroundImage = `url('${p.avatar}')`;
-    pick('brand-avatar').style.backgroundImage = `url('${p.avatar}')`;
-    pick('brand-avatar').classList.add('has-avatar');
-  }
+  const face = p.avatar ? `url('${p.avatar}')` : '';
+  pick('me-avatar').style.backgroundImage = face;
+  pick('avatar-preview').style.backgroundImage = face;
+  pick('brand-avatar').style.backgroundImage = face;
+  pick('brand-avatar').classList.toggle('has-avatar', !!p.avatar);
 
   if (p.characterImage) {
     pick('character-preview').style.backgroundImage = `url('${p.characterImage}')`;
@@ -255,6 +254,7 @@ function draw() {
 window.launcher.onroster(r => {
   members = r.members || [];
   draw();
+  refresh();
 });
 
 window.launcher.onerror(m => status(pick('status'), m.message, 'error'));
@@ -284,6 +284,12 @@ async function settings() {
     const el = pick(`set-${key}`);
     el.checked = !!store.settings[key];
     el.addEventListener('change', () => window.launcher.setsetting(key, el.checked));
+  });
+
+  const menubutton = pick('set-menuButton');
+  menubutton.value = store.settings.menuButton || 'right';
+  menubutton.addEventListener('change', () => {
+    window.launcher.setsetting('menuButton', menubutton.value);
   });
 
   const server = pick('set-serverUrl');

@@ -7,8 +7,10 @@ contextBridge.exposeInMainWorld('overlay', {
   menuactive:     (active) => ipcRenderer.send('menu:active', active),
   requestfocus:   ()       => ipcRenderer.send('request-focus'),
   release:        ()       => ipcRenderer.send('app:release'),
+  setstate:       (s)      => ipcRenderer.send('presence:state', s),
 
   getwebviewpreloadpath: () => ipcRenderer.invoke('get-webview-preload-path'),
+  vendortext: (name) => ipcRenderer.invoke('vendor:text', name),
 
   stageopen:  (url) => ipcRenderer.invoke('stage:open', url),
   stagego:    (url) => ipcRenderer.invoke('stage:go', url),

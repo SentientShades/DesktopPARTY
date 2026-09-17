@@ -61,7 +61,7 @@
       <div class="me-avatar" id="me-avatar"></div>
       <div class="me-text">
         <span class="me-name" id="me-name"></span>
-        <span class="me-status" id="me-status">Online</span>
+
       </div>
       <button id="open-profile" class="icon-btn" aria-label="Profile">&#9998;</button>
       <button id="open-settings" class="icon-btn" aria-label="Settings">&#9881;</button>
@@ -109,7 +109,7 @@
           <button id="clear-character" class="ghost mini">Use color instead</button>
         </div>
       </div>
-      <p class="hint">This is a separate picture used only for your player character on the desktop — your profile picture stays the same.</p>
+      <p class="hint">This is a separate picture used only for your player character on the desktop, your profile picture stays the same.</p>
 
       <label for="display-name">Display name</label>
       <input id="display-name" type="text" placeholder="How others see you" maxlength="24">
@@ -180,6 +180,12 @@
       <p class="hint">dont enable if your friends are evil lmao</p>
 
       <h3>Server</h3>
+      <label for="set-menuButton">Context menu button</label>
+      <select id="set-menuButton" class="picker">
+        <option value="right">Right click</option>
+        <option value="middle">Middle click</option>
+      </select>
+
       <label for="set-serverUrl">Signaling server</label>
       <input id="set-serverUrl" type="text" placeholder="wss://...">
       <p class="hint">set automatically</p>

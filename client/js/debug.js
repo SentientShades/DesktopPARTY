@@ -188,7 +188,6 @@
     show,
     hide,
     toggle: () => (panel ? hide() : show()),
-    isopen: () => !!panel,
-    note: (text) => window.debuglog('out', 'note', text)
+    isopen: () => !!panel
   };
 })();

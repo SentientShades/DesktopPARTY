@@ -1,14 +1,8 @@
 const { app, BrowserWindow, screen, ipcMain, dialog, nativeImage, Tray, Menu, session } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { pathToFileURL } = require('url');
-const toasts = require('./toasts-bridge');
-const presence = require('./presence');
-const store = require('./store');
-const input = require('./input');
-const activity = require('./activity');
-const localserver = require('./localserver');
-const tunnel = require('./tunnel');
-const discord = require('./discord-rpc');
+const { toasts, presence, store, input, activity, localserver, tunnel, discord } = require('./backend');
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
@@ -22,6 +16,7 @@ let lastmembers = [];
 let startedat = 0;
 let partycode = null;
 let stagewin = null;
+let doingnow = '';
 
 const active = () => !!userid || !!hosting;
 
@@ -47,7 +42,8 @@ function presencedata(members) {
 
   if (!startedat) startedat = Date.now();
 
-  const state = others.length === 0
+  const state = doingnow ? doingnow
+    : others.length === 0
     ? 'Just hanging out'
     : others.length <= 3
       ? `With ${others.join(', ')}`
@@ -203,6 +199,8 @@ function applycapture() {
   const { sendMyClicks } = store.getall().settings;
   if (!input.available.send) return;
 
+  input.setmenubutton(store.getall().settings.menuButton);
+
   if (sendMyClicks) {
     const { width, height } = screen.getPrimaryDisplay().bounds;
     input.setleft(({ rawx, rawy }) => {
@@ -280,6 +278,11 @@ ipcMain.handle('stage:go', async (_e, url) => {
 
 ipcMain.on('stage:close', () => stageclose());
 
+ipcMain.handle('vendor:text', (_e, name) => {
+  const safe = path.basename(String(name));
+  return fs.readFileSync(path.join(__dirname, '..', 'vendor', safe), 'utf8');
+});
+
 ipcMain.handle('get-webview-preload-path', () => {
   return pathToFileURL(path.join(__dirname, 'browser-webview-preload.js')).toString();
 });
@@ -299,7 +302,7 @@ ipcMain.handle('store:setProfile', (_e, patch) => {
 ipcMain.handle('store:setSetting', (_e, { key, value }) => {
   const settings = store.setsetting(key, value);
   tooverlay('settings:update', settings);
-  if (key === 'sendMyClicks') applycapture();
+  if (key === 'sendMyClicks' || key === 'menuButton') applycapture();
   return settings;
 });
 
@@ -445,6 +448,11 @@ ipcMain.on('party:leave', () => {
   endsession();
 });
 
+ipcMain.on('presence:state', (_e, text) => {
+  doingnow = text || '';
+  presencedata(lastmembers.length ? lastmembers : [userid]);
+});
+
 ipcMain.on('request-focus', () => focus());
 
 ipcMain.on('app:release', () => {
@@ -482,9 +490,13 @@ ipcMain.on('app:close', () => {
   if (active()) {
     ensuretray();
     launcherwin?.hide();
-  } else {
-    launcherwin?.close();
+    return;
   }
+
+  shutdown();
+  if (win && !win.isDestroyed()) win.destroy();
+  if (launcherwin && !launcherwin.isDestroyed()) launcherwin.destroy();
+  app.quit();
 });
 
 ipcMain.on('toast:clicked', (_e, id) => console.log('clicked toast', id));
