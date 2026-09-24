@@ -6,6 +6,9 @@ app i made to practice networking n stuff (used some ai on html and css but ever
 
 ---
 
+3D and physics engine source from MIT
+
+---
 DesktopPARTY! is an app that lets you connect (or host) a party on everyones desktop! all without the need for stinky traditional port forwarding, or paying for a server using stun/ice!!
 
 send your friends a party code, and join up in a discord call
