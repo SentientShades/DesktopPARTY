@@ -25,4 +25,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   shortcutName: DesktopPARTY!
+  installerIcon: assets/appicon_512x512.ico
+  uninstallerIcon: assets/appicon_512x512.ico
+  installerHeaderIcon: assets/appicon_512x512.ico
 electronVersion: 43.4.1

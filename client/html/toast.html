@@ -3,9 +3,6 @@
 <head>
   <meta charset="utf-8">
   <title></title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../css/toast.css">
 </head>
 <body>
@@ -34,49 +31,61 @@
 
   <div id="drawtoast" class="draw-toast interactive hidden">
     <div class="draw-head" id="drawgrip">
-      <span class="draw-title">Draw</span>
+      <span class="draw-grip"><i></i><i></i><i></i></span>
       <button class="draw-x" id="drawclose" aria-label="Close">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
           <path d="M3 3l10 10M13 3L3 13"/>
         </svg>
       </button>
     </div>
 
     <div class="draw-body">
+      <div class="draw-wheelwrap" id="drawwheelwrap">
+        <canvas id="drawwheel" width="360" height="360"></canvas>
+        <span class="draw-knob" id="drawknob"></span>
+      </div>
+
+      <input type="range" id="drawlight" class="light-slider" min="10" max="100" value="100" step="1" aria-label="Brightness">
+
       <div class="pd-tool-row">
-        <button class="tool custom-swatch" id="drawswatch" aria-label="Pen"></button>
-        <input type="range" id="drawhue" class="hue-slider" min="0" max="360" value="140" step="1" aria-label="Colour">
+        <button class="tool custom-swatch pen" id="drawswatch" aria-label="Pen">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+            <path d="M3 13l1-3.5L10.5 3 13 5.5 6.5 12z M9 4.5l2.5 2.5"/>
+          </svg>
+        </button>
         <button class="tool eraser" id="draweraser" aria-label="Eraser">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
             <path d="M4 12h9M6.5 12L3 8.5l5-5 3.5 3.5-5.5 5z"/>
           </svg>
         </button>
-        <button class="tool clear" id="drawclear" aria-label="Clear">Clear</button>
+        <button class="tool clear" id="drawclear" aria-label="Clear">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+            <path d="M3 4.5h10M6 4.5V3h4v1.5M4.5 4.5l.7 8.5h5.6l.7-8.5"/>
+          </svg>
+        </button>
       </div>
 
       <div class="pd-picker">
-        <span class="pd-label">Light</span>
-        <input type="range" id="drawlight" class="light-slider" min="0" max="100" value="50" step="1" aria-label="Brightness">
-      </div>
-
-      <div class="pd-picker">
-        <span class="pd-label">Size</span>
+        <span class="pd-dot" id="drawdot"></span>
         <input type="range" id="drawsize" class="size-slider" min="2" max="24" value="4" step="1" aria-label="Brush size">
         <span class="pd-size-val" id="drawsizeval">4</span>
       </div>
-
-      <p class="pd-hint" id="drawhint">Pick the pen to draw anywhere on screen</p>
     </div>
   </div>
+
+  <div id="drawframe" class="hidden"></div>
+  <div id="drawcursor" class="hidden"></div>
 
   <div id="toast-stack"></div>
 
   <script src="../js/debug.js"></script>
   <script src="../js/ui.js"></script>
+  <script src="../js/wobble.js"></script>
   <script src="../vendor/matter.min.js"></script>
   <script src="../js/world.js"></script>
   <script src="../js/activities.js"></script>
   <script src="../js/tabletop.js"></script>
   <script src="../js/pool.js"></script>
+  <script src="../js/cards.js"></script>
 </body>
 </html>

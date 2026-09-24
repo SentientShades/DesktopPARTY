@@ -1,9 +1,10 @@
 (() => {
-  const maxlines = 120;
+  const maxlines = 120; // ring buffer size
   const refreshms = 700;
 
   let panel = null;
   let statebox = null;
+
   let statsbox = null;
   let logbox = null;
   let timer = null;
@@ -18,9 +19,9 @@
 
   function short(value) {
     let text;
-    try { text = JSON.stringify(value); } catch { text = String(value); }
+    try { text = JSON.stringify(value); } catch { text = String(value); } // circular refs fall back here
     if (!text) return '';
-    return text.length > 220 ? text.slice(0, 220) + '…' : text;
+    return text.length > 220 ? text.slice(0, 220) + '…' : text; // trim for the log box
   }
 
   window.debuglog = (dir, type, payload, from) => {
@@ -34,10 +35,9 @@
     if (lines.length > maxlines) lines.shift();
     if (panel && !paused) paintlog();
   };
-
   function paintlog() {
     if (!logbox) return;
-    const stuck = logbox.scrollTop + logbox.clientHeight >= logbox.scrollHeight - 30;
+    const stuck = logbox.scrollTop + logbox.clientHeight >= logbox.scrollHeight - 30; // autoscroll only if already at bottom
 
     logbox.innerHTML = '';
     lines.forEach(l => {
@@ -84,7 +84,9 @@
       : 'no peers';
   }
 
+
   function build() {
+
     panel = document.createElement('div');
     panel.id = 'debugpanel';
     panel.className = 'interactive';
@@ -180,7 +182,7 @@
   window.addEventListener('keydown', (e) => {
     if (e.key === 'F9') {
       e.preventDefault();
-      panel ? hide() : show();
+      panel ? hide() : show(); // toggle
     }
   });
 

@@ -3,8 +3,6 @@
 <head>
   <meta charset="utf-8">
   <title>DesktopPARTY!</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../css/launcher.css">
 </head>
 <body>
@@ -42,6 +40,11 @@
 
       <button id="host-btn" class="block">Start hosting</button>
 
+      <label class="lan-toggle" for="host-lan">
+        <input type="checkbox" id="host-lan">
+        <span>lan only</span>
+      </label>
+
       <div id="host-info" class="host-info hidden">
         <label>Your party code</label>
         <div class="code-row">
@@ -68,7 +71,7 @@
     </header>
 
     <div id="hosting-banner" class="banner hidden">
-      <span>Hosting &middot; <code id="banner-code"></code></span>
+      <span><span id="banner-label">Hosting</span> &middot; <code id="banner-code"></code></span>
       <button id="banner-copy" class="mini">Copy</button>
     </div>
 
@@ -77,7 +80,7 @@
       <span id="party-count" class="pill">0/8</span>
     </div>
 
-    <div id="party-list" class="list is-empty" data-empty="Waiting for friends…"></div>
+    <div id="party-list" class="list is-empty" data-empty="connecting...!!"></div>
 
     <div class="row">
       <button id="leave-party" class="ghost block" disabled>Leave party</button>
@@ -101,7 +104,7 @@
         </div>
       </div>
 
-      <label>Character skin (optional)</label>
+      <label>Character skin</label>
       <div class="avatar-edit">
         <div class="avatar-preview" id="character-preview"></div>
         <div class="avatar-actions">
@@ -109,7 +112,7 @@
           <button id="clear-character" class="ghost mini">Use color instead</button>
         </div>
       </div>
-      <p class="hint">This is a separate picture used only for your player character on the desktop, your profile picture stays the same.</p>
+      <p class="hint"></p>
 
       <label for="display-name">Display name</label>
       <input id="display-name" type="text" placeholder="How others see you" maxlength="24">
@@ -134,61 +137,96 @@
       <h2>Settings</h2>
     </div>
     <div class="sheet-body">
-      <h3>Overlay</h3>
 
-      <label class="toggle">
-        <span class="toggle-text">
-          <span class="toggle-title">Show names on cursors</span>
-          <span class="toggle-sub">display names next to cursors</span>
-        </span>
-        <input type="checkbox" id="set-showNames">
-        <span class="switch"></span>
-      </label>
+      <section class="set-group">
+        <div class="set-head">
+          <svg viewBox="0 0 16 16"><path d="M2 2l5 12 2-5 5-2z"/></svg>
+          <span>Cursors</span>
+        </div>
+        <label class="toggle">
+          <span class="toggle-text">
+            <span class="toggle-title">Show names</span>
+            <span class="toggle-sub">names next to everyones cursor</span>
+          </span>
+          <input type="checkbox" id="set-showNames">
+          <span class="switch"></span>
+        </label>
+      </section>
 
-      <h3>Drawing</h3>
+      <section class="set-group">
+        <div class="set-head">
+          <svg viewBox="0 0 16 16"><path d="M3 13l1-3.5L10.5 3 13 5.5 6.5 12z"/></svg>
+          <span>Drawing</span>
+        </div>
+        <label class="toggle">
+          <span class="toggle-text">
+            <span class="toggle-title">Let friends draw</span>
+            <span class="toggle-sub"></span>
+          </span>
+          <input type="checkbox" id="set-allowDrawing">
+          <span class="switch"></span>
+        </label>
+      </section>
 
-      <label class="toggle">
-        <span class="toggle-text">
-          <span class="toggle-title">allow drawing on my screen</span>
-          <span class="toggle-sub">allows drawing on your screen</span>
-        </span>
-        <input type="checkbox" id="set-allowDrawing">
-        <span class="switch"></span>
-      </label>
+      <section class="set-group">
+        <div class="set-head">
+          <svg viewBox="0 0 16 16"><path d="M5 2v7l2-2 2 5 2-1-2-5h3z"/></svg>
+          <span>Clicks</span>
+        </div>
+        <label class="toggle">
+          <span class="toggle-text">
+            <span class="toggle-title">Share my clicks</span>
+            <span class="toggle-sub"></span>
+          </span>
+          <input type="checkbox" id="set-sendMyClicks">
+          <span class="switch"></span>
+        </label>
+        <label class="toggle danger">
+          <span class="toggle-text">
+            <span class="toggle-title">Let friends click for me</span>
+            <span class="toggle-sub"></span>
+          </span>
+          <input type="checkbox" id="set-allowRemoteClicks">
+          <span class="switch"></span>
+        </label>
+        <p class="warn hidden" id="input-warn"></p>
+      </section>
 
-      <h3>Remote input</h3>
+      <section class="set-group">
+        <div class="set-head">
+          <svg viewBox="0 0 16 16"><path d="M3 2h10v12H3z M3 7h10"/></svg>
+          <span>Menu</span>
+        </div>
+        <div class="set-row">
+          <span class="toggle-text">
+            <span class="toggle-title">Open the menu with</span>
+            <span class="toggle-sub">the button that pops the party menu</span>
+          </span>
+          <div class="segmented" id="set-menuButton">
+            <button type="button" data-value="right">Right</button>
+            <button type="button" data-value="middle">Middle</button>
+          </div>
+        </div>
+      </section>
 
-      <label class="toggle">
-        <span class="toggle-text">
-          <span class="toggle-title">Send my clicks</span>
-          <span class="toggle-sub">registers your clicks</span>
-        </span>
-        <input type="checkbox" id="set-sendMyClicks">
-        <span class="switch"></span>
-      </label>
+      <details class="set-group advanced">
+        <summary class="set-head">
+          <svg viewBox="0 0 16 16"><path d="M8 3v2M8 11v2M3 8h2M11 8h2M5 5l1 1M10 10l1 1M11 5l-1 1M6 10l-1 1"/></svg>
+          <span>Advanced</span>
+          <i class="chev"></i>
+        </summary>
+        <div class="set-row column">
+          <span class="toggle-text">
+            <span class="toggle-title">Signaling server</span>
+            <span class="toggle-sub">filled in for you when you host or join</span>
+          </span>
+          <div class="code-row">
+            <input id="set-serverUrl" type="text" placeholder="wss://..." spellcheck="false">
+            <button id="server-reset" class="mini ghost" type="button">Clear</button>
+          </div>
+        </div>
+      </details>
 
-      <label class="toggle">
-        <span class="toggle-text">
-          <span class="toggle-title">Allow clicks on my screen</span>
-          <span class="toggle-sub">lets other people click on your screen</span>
-        </span>
-        <input type="checkbox" id="set-allowRemoteClicks">
-        <span class="switch"></span>
-      </label>
-
-      <p class="warn" id="input-warn"></p>
-      <p class="hint">dont enable if your friends are evil lmao</p>
-
-      <h3>Server</h3>
-      <label for="set-menuButton">Context menu button</label>
-      <select id="set-menuButton" class="picker">
-        <option value="right">Right click</option>
-        <option value="middle">Middle click</option>
-      </select>
-
-      <label for="set-serverUrl">Signaling server</label>
-      <input id="set-serverUrl" type="text" placeholder="wss://...">
-      <p class="hint">set automatically</p>
     </div>
   </div>
 

@@ -1,4 +1,4 @@
-// ---- drawing on the desktop ----
+
 (() => {
   const canvas = document.getElementById('draw-canvas');
   const ctx = canvas.getContext('2d');
@@ -7,13 +7,17 @@
   const grip   = document.getElementById('drawgrip');
   const shut   = document.getElementById('drawclose');
   const swatch = document.getElementById('drawswatch');
-  const hue    = document.getElementById('drawhue');
+  const wheel  = document.getElementById('drawwheel');
+  const wrap   = document.getElementById('drawwheelwrap');
+  const knob   = document.getElementById('drawknob');
   const light  = document.getElementById('drawlight');
   const size   = document.getElementById('drawsize');
   const sizeval = document.getElementById('drawsizeval');
+  const dot    = document.getElementById('drawdot');
   const eraser = document.getElementById('draweraser');
   const wipe   = document.getElementById('drawclear');
-  const hint   = document.getElementById('drawhint');
+  const frame  = document.getElementById('drawframe');
+  const cursor = document.getElementById('drawcursor');
 
   const erasew = 28;
   const batchms = 40;
@@ -26,6 +30,11 @@
   const pending = [];
   let flushtimer = null;
 
+  let hue = 140;
+  let sat = 0.85;
+  let val = 1;
+  let picking = false;
+
   canvas.width  = window.innerWidth;
   canvas.height = window.innerHeight;
 
@@ -37,49 +46,109 @@
     if (snap) { try { ctx.putImageData(snap, 0, 0); } catch {} }
   });
 
-  function tohex(h, s, l) {
-    const c = (1 - Math.abs(2 * l - 1)) * s;
-    const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
-    const m = l - c / 2;
-    let r = 0, g = 0, b = 0;
-    if (h < 60)       { r = c; g = x; }
-    else if (h < 120) { r = x; g = c; }
-    else if (h < 180) { g = c; b = x; }
-    else if (h < 240) { g = x; b = c; }
-    else if (h < 300) { r = x; b = c; }
-    else              { r = c; b = x; }
-    const to = (v) => Math.round((v + m) * 255).toString(16).padStart(2, '0');
-    return `#${to(r)}${to(g)}${to(b)}`;
+  function hsv(h, s, v) {
+    const f = (n) => {
+      const k = (n + h / 60) % 6;
+      return v - v * s * Math.max(0, Math.min(k, 4 - k, 1));
+    };
+    return [f(5), f(3), f(1)].map(x => Math.round(x * 255));
+  }
+
+  function tohex(rgb) {
+    return `#${rgb.map(x => x.toString(16).padStart(2, '0')).join('')}`;
+  }
+
+  function paintwheel() {
+    const wctx = wheel.getContext('2d');
+    const n = wheel.width;
+    const r = n / 2;
+    const img = wctx.createImageData(n, n);
+
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        const dx = x - r + 0.5, dy = y - r + 0.5;
+        const d = Math.hypot(dx, dy);
+        const k = (y * n + x) * 4;
+        if (d > r) { img.data[k + 3] = 0; continue; }
+
+        const h = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+        const [cr, cg, cb] = hsv(h, Math.min(1, d / (r - 1)), val);
+        img.data[k] = cr;
+        img.data[k + 1] = cg;
+        img.data[k + 2] = cb;
+        img.data[k + 3] = Math.round(255 * Math.max(0, Math.min(1, r - d)));
+      }
+    }
+    wctx.putImageData(img, 0, 0);
   }
 
   function refresh() {
-    const h = Number(hue.value);
-    const l = Number(light.value) / 100;
-    const hex = tohex(h, 0.85, l);
+    const hex = tohex(hsv(hue, sat, val));
+    const bright = tohex(hsv(hue, sat, 1));
 
     swatch.style.setProperty('--sw', hex);
     swatch.dataset.color = hex;
-    hue.style.setProperty('--thumb', hex);
-    light.style.setProperty('--thumb', hex);
-    light.style.background =
-      `linear-gradient(to right, #000000, ${tohex(h, .85, .5)}, #ffffff)`;
+    const [r, g, b] = hsv(hue, sat, val);
+    swatch.style.color = (0.299 * r + 0.587 * g + 0.114 * b) > 150 ? '#111' : '#fff';
 
+    light.style.setProperty('--thumb', hex);
+    light.style.background = `linear-gradient(to right, #000000, ${bright})`;
+
+    const box = wrap.clientWidth || 176;
+    const a = hue * Math.PI / 180;
+    const rad = (box / 2) * sat;
+    knob.style.transform = `translate(${(box / 2 + Math.cos(a) * rad).toFixed(1)}px, ${(box / 2 + Math.sin(a) * rad).toFixed(1)}px) translate(-50%, -50%)`;
+    knob.style.background = hex;
+
+    dot.style.setProperty('--sw', hex);
+    const shown = Math.max(4, Math.min(24, brush));
+    dot.style.width = `${shown}px`;
+    dot.style.height = `${shown}px`;
+
+    frame.style.setProperty('--sw', tool === 'erase' ? '#ffffff' : hex);
+    cursor.style.setProperty('--sw', tool === 'erase' ? '#ffffff' : hex);
+    const cw = tool === 'erase' ? erasew : brush;
+    cursor.style.width = `${Math.max(6, cw)}px`;
+    cursor.style.height = `${Math.max(6, cw)}px`;
     return hex;
   }
 
-  [hue, light].forEach(el => {
-    el.addEventListener('input', () => {
-      const hex = refresh();
-      if (tool && tool !== 'erase') settool(hex);
-    });
+  function pick(e) {
+    const rect = wheel.getBoundingClientRect();
+    const r = rect.width / 2;
+    const dx = e.clientX - rect.left - r;
+    const dy = e.clientY - rect.top - r;
+    hue = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+    sat = Math.min(1, Math.hypot(dx, dy) / r);
+    const hex = refresh();
+    if (tool !== 'erase') settool(hex);
+  }
+
+  wheel.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    picking = true;
+    try { wheel.setPointerCapture(e.pointerId); } catch {}
+    pick(e);
+  });
+  wheel.addEventListener('pointermove', (e) => { if (picking) pick(e); });
+  const endpick = () => { picking = false; };
+  wheel.addEventListener('pointerup', endpick);
+  wheel.addEventListener('pointercancel', endpick);
+
+  light.addEventListener('input', () => {
+    val = Number(light.value) / 100;
+    paintwheel();
+    const hex = refresh();
+    if (tool && tool !== 'erase') settool(hex);
   });
 
   size.addEventListener('input', () => {
     brush = Number(size.value);
     sizeval.textContent = brush;
+    refresh();
   });
 
-  [hue, light, size].forEach(el => {
+  [light, size].forEach(el => {
     el.addEventListener('click', (e) => e.stopPropagation());
     el.addEventListener('pointerdown', (e) => e.stopPropagation());
   });
@@ -122,10 +191,15 @@
   const color = () => (tool === 'erase' ? null : tool);
   const width = () => (tool === 'erase' ? erasew : brush);
 
+  function follow(e) {
+    cursor.style.transform = `translate(${e.clientX}px, ${e.clientY}px) translate(-50%, -50%)`;
+  }
+
   canvas.addEventListener('pointerdown', (e) => {
     if (!tool) return;
     drawing = true;
     last = norm(e);
+    follow(e);
     try { canvas.setPointerCapture(e.pointerId); } catch {}
 
     const c = color(), w = width();
@@ -134,6 +208,7 @@
   });
 
   canvas.addEventListener('pointermove', (e) => {
+    if (tool) follow(e);
     if (!drawing || !tool) return;
     const p = norm(e);
     const c = color(), w = width();
@@ -141,6 +216,9 @@
     queue([last.x, last.y, p.x, p.y, c, w]);
     last = p;
   });
+
+  canvas.addEventListener('pointerenter', () => { if (tool) cursor.classList.remove('hidden'); });
+  canvas.addEventListener('pointerleave', () => cursor.classList.add('hidden'));
 
   const endstroke = () => {
     if (!drawing) return;
@@ -159,13 +237,13 @@
 
     swatch.classList.toggle('active', !!next && next !== 'erase');
     eraser.classList.toggle('active', next === 'erase');
+    toast.classList.toggle('armed', !!next);
 
     canvas.classList.toggle('armed', !!next);
+    frame.classList.toggle('hidden', !next);
+    if (!next) cursor.classList.add('hidden');
+    refresh();
     window.overlay.drawmode(!!next);
-
-    hint.textContent = next
-      ? 'Drawing, press Esc to stop'
-      : 'Pick the pen to draw anywhere on screen';
 
     window.overlay.setstate?.(next ? 'Drawing on the desktop' : '');
   }
@@ -226,10 +304,12 @@
     toast.classList.toggle('hidden', !next);
     if (!next && tool) settool(null);
     if (next && !toast.style.transform) {
-      place(window.innerWidth / 2 - 160, window.innerHeight / 2 - 120);
+      place(window.innerWidth / 2 - 110, window.innerHeight / 2 - 190);
     }
+    if (next) requestAnimationFrame(refresh);
   }
 
+  paintwheel();
   refresh();
   sizeval.textContent = brush;
 
@@ -285,226 +365,7 @@
   };
 })();
 
-// ---- shared browser ----
-(() => {
-  const cardw = 760;
-  const cardh = 520;
-  const movems = 33;
 
-  let card = null;
-  let view = null;
-  let held = false;
-  let grab = { x: 0, y: 0 };
-  let remotenav = false;
-  let sent = 0;
-
-  function where() {
-    const r = card.getBoundingClientRect();
-    return { x: r.left, y: r.top };
-  }
-
-  function place(x, y) {
-    x = Math.max(0, Math.min(window.innerWidth - 60, x));
-    y = Math.max(0, Math.min(window.innerHeight - 40, y));
-    card.style.transform = `translate(${x}px, ${y}px)`;
-  }
-
-  function normalize(raw) {
-    const u = raw.trim();
-    if (/^https?:\/\//i.test(u)) return u;
-    if (/^[\w-]+(\.[\w-]+)+([\/?#].*)?$/.test(u)) return `https://${u}`;
-    return `https://www.google.com/search?q=${encodeURIComponent(u)}`;
-  }
-
-  async function build(url, x, y) {
-    const preload = await window.overlay.getwebviewpreloadpath();
-
-    card = document.createElement('div');
-    card.className = 'browser-card interactive';
-    card.style.width = cardw + 'px';
-    card.style.height = cardh + 'px';
-
-    const bar = document.createElement('div');
-    bar.className = 'browser-bar';
-
-    const grip = document.createElement('div');
-    grip.className = 'browser-drag';
-    grip.textContent = '⠿';
-
-    const addr = document.createElement('input');
-    addr.type = 'text';
-    addr.className = 'browser-addr';
-    addr.value = url;
-    addr.spellcheck = false;
-
-    const go = document.createElement('button');
-    go.className = 'browser-go mini';
-    go.textContent = 'Go';
-
-    const hide = document.createElement('button');
-    hide.className = 'browser-hide mini ghost';
-    hide.textContent = '–';
-    hide.title = 'Hide for me';
-
-    const shut = document.createElement('button');
-    shut.className = 'browser-close mini ghost';
-    shut.textContent = '✕';
-    shut.title = 'End for everyone';
-
-    bar.append(grip, addr, go, hide, shut);
-
-    view = document.createElement('webview');
-    view.className = 'browser-view';
-    view.setAttribute('src', url);
-    view.setAttribute('preload', preload);
-    view.setAttribute('allowpopups', 'false');
-    view.setAttribute('partition', 'persist:sharedbrowser');
-
-    card.append(bar, view);
-    document.body.appendChild(card);
-    place(x, y);
-
-    function navigate(raw) {
-      view.loadURL(normalize(raw)).catch(() => {});
-    }
-
-    go.addEventListener('click', () => navigate(addr.value));
-    addr.addEventListener('keydown', (e) => { if (e.key === 'Enter') navigate(addr.value); });
-    addr.addEventListener('pointerdown', (e) => e.stopPropagation());
-    go.addEventListener('pointerdown', (e) => e.stopPropagation());
-
-    const moved = (e) => {
-      addr.value = e.url;
-      if (!remotenav) {
-        window.party.broadcast({ t: 'bwnav', url: e.url });
-      }
-    };
-    view.addEventListener('did-navigate', moved);
-    view.addEventListener('did-navigate-in-page', moved);
-
-    view.addEventListener('ipc-message', (e) => {
-      if (e.channel === 'bw:scroll') {
-        window.party.broadcast({ t: 'bwscroll', x: e.args[0].x, y: e.args[0].y });
-      } else if (e.channel === 'bw:selection') {
-        window.party.broadcast({ t: 'bwsel', sel: e.args[0] });
-      } else if (e.channel === 'bw:video') {
-        window.party.broadcast({ t: 'bwvideo', action: e.args[0].action, at: e.args[0].at });
-      }
-    });
-
-    grip.addEventListener('pointerdown', (e) => {
-      held = true;
-      window.dragging = true;
-      const pos = where();
-      grab = { x: e.clientX - pos.x, y: e.clientY - pos.y };
-      try { grip.setPointerCapture(e.pointerId); } catch {}
-    });
-    grip.addEventListener('pointermove', (e) => {
-      if (!held) return;
-      const x = e.clientX - grab.x;
-      const y = e.clientY - grab.y;
-      place(x, y);
-      const now = performance.now();
-      if (now - sent > movems) {
-        sent = now;
-        window.party.broadcast({ t: 'bwmove', x: x / window.innerWidth, y: y / window.innerHeight });
-      }
-    });
-    const letgo = () => {
-      if (!held) return;
-      held = false;
-      window.dragging = false;
-      const pos = where();
-      window.party.broadcast({ t: 'bwmove', x: pos.x / window.innerWidth, y: pos.y / window.innerHeight });
-    };
-    grip.addEventListener('pointerup', letgo);
-    grip.addEventListener('pointercancel', letgo);
-
-    hide.addEventListener('click', () => destroy());
-    shut.addEventListener('click', () => {
-      window.party.broadcast({ t: 'bwclose' });
-      destroy();
-    });
-  }
-
-  function destroy() {
-    if (card) { card.remove(); card = null; view = null; }
-    window.overlay.setstate?.('');
-  }
-
-  async function open(url, x, y) {
-    if (card) return;
-    await build(url, x, y);
-    window.overlay.setstate?.('Browsing together');
-  }
-
-  async function toggle() {
-    if (card) { destroy(); return; }
-    const x = window.innerWidth / 2 - cardw / 2;
-    const y = window.innerHeight / 2 - cardh / 2;
-    await open('https://www.google.com', x, y);
-    window.party.broadcast({
-      t: 'bwopen',
-      url: 'https://www.google.com',
-      x: x / window.innerWidth, y: y / window.innerHeight
-    });
-  }
-
-  window.party?.onmessage(async (from, m) => {
-    if (m.t === 'bwopen') {
-      if (!card) {
-        await open(m.url, m.x * window.innerWidth, m.y * window.innerHeight);
-        window.party.sendto(from, { t: 'bwvideoask' });
-      }
-    }
-    else if (m.t === 'bwclose') {
-      destroy();
-    }
-    else if (m.t === 'bwmove') {
-      if (card && !held) place(m.x * window.innerWidth, m.y * window.innerHeight);
-    }
-    else if (m.t === 'bwnav') {
-      if (view) {
-        remotenav = true;
-        view.loadURL(m.url).catch(() => {});
-        setTimeout(() => { remotenav = false; }, 300);
-      }
-    }
-    else if (m.t === 'bwscroll') {
-      view?.send('bw:apply-scroll', { x: m.x, y: m.y });
-    }
-    else if (m.t === 'bwsel') {
-      view?.send('bw:apply-selection', m.sel);
-    }
-    else if (m.t === 'bwvideo') {
-      view?.send('bw:apply-video', { action: m.action, at: m.at });
-    }
-    else if (m.t === 'bwvideoask') {
-      view?.send('bw:request-video-state');
-    }
-  });
-
-  window.overlay.onroster(({ members }) => {
-    if (!members || members.length === 0) destroy();
-  });
-
-  window.browser = {
-    toggle,
-    isopen: () => !!card,
-    onpeer(id) {
-      if (!card || !view) return;
-      const pos = where();
-      window.party.sendto(id, {
-        t: 'bwopen',
-        url: view.getURL() || 'https://www.google.com',
-        x: pos.x / window.innerWidth,
-        y: pos.y / window.innerHeight
-      });
-    }
-  };
-})();
-
-// ---- party votes ----
 (() => {
   const windowms = 20000;
   const tickms = 250;
@@ -721,13 +582,13 @@
   window.vote = { start, on, lobby, needed, isopen: () => !!live };
 })();
 
-// ---- stage capture + streaming ----
 (() => {
   let stage = null;
   let capture = null;
   let mode = 'none';
 
   async function broadcaststart(url) {
+    if (capture) broadcaststop();
     const info = await window.overlay.stageopen(url);
     if (!info?.sourceid) throw new Error('Could not open the stage window');
     stage = info;
@@ -786,6 +647,41 @@
     return capture;
   }
 
+  async function broadcastwindow(sourceid) {
+    broadcaststop();
+
+    const video = {
+      mandatory: {
+        chromeMediaSource: 'desktop',
+        chromeMediaSourceId: sourceid,
+        maxWidth: 1920,
+        maxHeight: 1080,
+        maxFrameRate: 30
+      }
+    };
+
+    try {
+      capture = await navigator.mediaDevices.getUserMedia({
+        audio: { mandatory: { chromeMediaSource: 'desktop' } },
+        video
+      });
+      mode = 'system';
+      window.debuglog?.('out', 'capture', 'window with system audio');
+    } catch (e) {
+      window.debuglog?.('out', 'capture', `window audio failed (${e.name}), video only`);
+      capture = await navigator.mediaDevices.getUserMedia({ audio: false, video });
+      mode = 'silent';
+    }
+
+    window.party.addstream(capture);
+    return capture;
+  }
+
+
+  function sources() {
+    return window.overlay.stagesources();
+  }
+
   function broadcaststop() {
     if (capture) {
       window.party.dropstream(capture);
@@ -813,13 +709,16 @@
     stagesize,
     audiomode,
     broadcaststart,
+    broadcastwindow,
     broadcaststop,
+    sources,
     stagego,
+    isstage: () => !!stage,
     iscapturing: () => !!capture
   };
 })();
 
-// ---- theater room ----
+
 (() => {
   const closems = 900;
   const holdms = 1000;
@@ -850,6 +749,18 @@
   let sampler = null;
   let bartimer = null;
   let closing = false;
+  let stagekind = 'page';
+
+  let big = false;
+  let volume = 1;
+  let muted = false;
+  let volbtn = null;
+  let volslider = null;
+  let fullbtn = null;
+  let onkey = null;
+
+  let away = false;
+  let awaypill = null;
 
   const me = () => window.party?.myid?.();
   const presenting = () => presenter === me() && window.media.iscapturing();
@@ -965,16 +876,23 @@
       const input = document.createElement('input');
       input.type = 'text';
       input.className = 'th-input';
-      input.placeholder = 'Paste a link to put it on the screen';
+      input.placeholder = 'Paste a link, or share a window';
       input.spellcheck = false;
 
       const go = document.createElement('button');
       go.className = 'mini';
       go.textContent = 'Play';
 
+      const pickwin = document.createElement('button');
+      pickwin.className = 'mini ghost';
+      pickwin.textContent = 'Window';
+
       const cancel = document.createElement('button');
       cancel.className = 'mini ghost';
       cancel.textContent = 'Cancel';
+
+      const grid = document.createElement('div');
+      grid.className = 'th-sources hidden';
 
       let done = false;
       const finish = (v) => {
@@ -985,15 +903,58 @@
         resolve(v);
       };
 
-      go.addEventListener('click', () => finish(input.value.trim() || null));
+      const link = () => {
+        const url = input.value.trim();
+        finish(url ? { kind: 'page', url } : null);
+      };
+
+      go.addEventListener('click', link);
       cancel.addEventListener('click', () => finish(null));
       input.addEventListener('keydown', (e) => {
         e.stopPropagation();
-        if (e.key === 'Enter') finish(input.value.trim() || null);
+        if (e.key === 'Enter') link();
         if (e.key === 'Escape') finish(null);
       });
 
-      ask.append(input, go, cancel);
+      pickwin.addEventListener('click', async () => {
+        grid.classList.remove('hidden');
+        grid.innerHTML = '';
+        const wait = document.createElement('div');
+        wait.className = 'th-sourcewait';
+        wait.textContent = 'Looking for windows';
+        grid.appendChild(wait);
+
+        let list = [];
+        try { list = await window.media.sources(); } catch {}
+        if (done) return;
+        grid.innerHTML = '';
+
+        if (!list.length) {
+          wait.textContent = 'No windows found';
+          grid.appendChild(wait);
+          return;
+        }
+
+        list.forEach(src => {
+          const item = document.createElement('button');
+          item.className = 'th-source';
+          item.title = src.name;
+
+          const shot = document.createElement('div');
+          shot.className = 'th-sourceshot';
+          if (src.thumb) shot.style.backgroundImage = `url('${src.thumb}')`;
+
+          const name = document.createElement('span');
+          name.className = 'th-sourcename';
+          name.textContent = src.screen ? `Screen: ${src.name}` : src.name;
+
+          item.append(shot, name);
+          item.addEventListener('click', () => finish({ kind: 'window', id: src.id, name: src.name }));
+          grid.appendChild(item);
+        });
+      });
+
+      ask.append(input, go, pickwin, cancel, grid);
       input.focus();
     });
   }
@@ -1002,10 +963,11 @@
     back: '<path d="M11 4 4 10l7 6z"/><path d="M17 4l-7 6 7 6z"/>',
     playpause: '<path d="M4 3l9 7-9 7z"/>',
     forward: '<path d="M9 4l7 6-7 6z"/><path d="M3 4l7 6-7 6z"/>',
+    volume: '<path d="M4 8h3l4-3v10l-4-3H4z"/><path d="M13.5 7.5a3.5 3.5 0 0 1 0 5M15.5 5.5a6.4 6.4 0 0 1 0 9" stroke="currentColor" stroke-width="1.5" fill="none"/>',
     mute: '<path d="M4 8h3l4-3v10l-4-3H4z"/><path d="M13 7l4 6M17 7l-4 6" stroke="currentColor" stroke-width="1.6" fill="none"/>',
     full: '<path d="M3 3h6v2H5v4H3z"/><path d="M17 3h-6v2h4v4h2z"/><path d="M3 17h6v-2H5v-4H3z"/><path d="M17 17h-6v-2h4v-4h2z"/>',
+    shrink: '<path d="M7 3h2v6H3V7h4z"/><path d="M13 3h-2v6h6V7h-4z"/><path d="M7 17h2v-6H3v2h4z"/><path d="M13 17h-2v-6h6v2h-4z"/>',
     link: '<path d="M8 12a4 4 0 0 1 0-5l2-2a4 4 0 0 1 6 6l-1 1" stroke="currentColor" stroke-width="1.7" fill="none"/><path d="M12 8a4 4 0 0 1 0 5l-2 2a4 4 0 0 1-6-6l1-1" stroke="currentColor" stroke-width="1.7" fill="none"/>',
-    bug: '<path d="M7 6a3 3 0 0 1 6 0z"/><rect x="6" y="7" width="8" height="9" rx="4"/><path d="M4 9h2M14 9h2M4 13h2M14 13h2" stroke="currentColor" stroke-width="1.4"/>',
     close: '<path d="M4 4l12 12M16 4L4 16" stroke="currentColor" stroke-width="1.8" fill="none"/>',
   };
 
@@ -1019,29 +981,140 @@
     return b;
   }
 
+  function seticon(b, name) {
+    b.innerHTML = `<svg viewBox="0 0 20 20" fill="currentColor">${icons[name]}</svg>`;
+  }
+
   function buildbar() {
     bar.innerHTML = '';
 
-    bar.append(
+    const pagebtns = [
       iconbutton('Back 5s', 'back', () => sendkey('ArrowLeft')),
       iconbutton('Play / pause', 'playpause', () => sendkey(' ')),
-      iconbutton('Forward 5s', 'forward', () => sendkey('ArrowRight')),
-      iconbutton('Mute', 'mute', () => sendkey('m')),
-      iconbutton('Fullscreen', 'full', () => sendkey('f'))
-    );
+      iconbutton('Forward 5s', 'forward', () => sendkey('ArrowRight'))
+    ];
+    pagebtns.forEach(b => b.classList.add('th-pagebtn'));
+
+    volbtn = iconbutton('Mute', 'volume', togglemute);
+
+    volslider = document.createElement('input');
+    volslider.type = 'range';
+    volslider.min = '0';
+    volslider.max = '100';
+    volslider.step = '1';
+    volslider.className = 'th-volslider';
+    volslider.setAttribute('aria-label', 'Volume');
+    volslider.addEventListener('input', () => {
+      volume = Number(volslider.value) / 100;
+      muted = volume === 0;
+      applyvolume();
+    });
+    volslider.addEventListener('pointerdown', (e) => e.stopPropagation());
+    volslider.addEventListener('click', (e) => e.stopPropagation());
+
+    const vol = document.createElement('div');
+    vol.className = 'th-vol';
+    vol.append(volbtn, volslider);
+
+    fullbtn = iconbutton('Fullscreen', 'full', togglebig);
 
     const spacer = document.createElement('div');
     spacer.className = 'th-spacer';
-    bar.appendChild(spacer);
+
+    bar.append(...pagebtns, vol, fullbtn, spacer);
 
     bar.append(
       iconbutton('Put something on', 'link', picklink),
-      iconbutton('Debug', 'bug', () => window.debugpanel?.toggle()),
       iconbutton('Close for everyone', 'close', () => close(true))
     );
+
+    applyvolume();
+    applykind();
+  }
+
+
+  function applyvolume() {
+    if (!video) return;
+    const deaf = presenting() && window.media.audiomode() !== 'frame';
+
+    video.volume = Math.max(0, Math.min(1, volume));
+    video.muted = deaf || muted || volume === 0;
+
+    if (!volbtn) return;
+    seticon(volbtn, video.muted ? 'mute' : 'volume');
+    volbtn.classList.toggle('on', muted || volume === 0);
+    volbtn.title = deaf ? 'You hear it straight from your pc' : (video.muted ? 'Unmute' : 'Mute');
+    volbtn.disabled = deaf;
+    volslider.disabled = deaf;
+    volslider.value = String(Math.round((muted ? 0 : volume) * 100));
+    volslider.style.setProperty('--fill', `${Math.round((muted ? 0 : volume) * 100)}%`);
+  }
+
+  function togglemute() {
+    if (muted || volume === 0) {
+      muted = false;
+      if (volume === 0) volume = 0.5;
+    } else {
+      muted = true;
+    }
+    applyvolume();
+  }
+
+  function togglebig() {
+    setbig(!big);
+  }
+
+  function setbig(on) {
+    big = on;
+    root?.classList.toggle('big', big);
+    if (!fullbtn) return;
+    seticon(fullbtn, big ? 'shrink' : 'full');
+    fullbtn.title = big ? 'Exit fullscreen' : 'Fullscreen';
+    fullbtn.classList.toggle('on', big);
+  }
+
+  function setaway(on) {
+    away = on && open;
+    root?.classList.toggle('away', away);
+
+    if (away) {
+      if (!awaypill) {
+        awaypill = document.createElement('div');
+        awaypill.className = 'th-awaypill interactive';
+
+        const dot = document.createElement('span');
+        dot.className = 'th-awaydot';
+
+        const label = document.createElement('span');
+        label.textContent = 'Streaming your window';
+
+        const back = document.createElement('button');
+        back.className = 'mini';
+        back.textContent = 'Back to theater';
+        back.addEventListener('click', (e) => {
+          e.stopPropagation();
+          setaway(false);
+        });
+
+        awaypill.append(dot, label, back);
+        document.body.appendChild(awaypill);
+      }
+      window.overlay.menuactive(false);
+    } else {
+      awaypill?.remove();
+      awaypill = null;
+      if (open) window.overlay.menuactive(true);
+    }
+    window.refreshignore?.();
+  }
+
+
+  function applykind() {
+    bar?.classList.toggle('nopage', stagekind !== 'page');
   }
 
   function sendkey(key) {
+    if (stagekind !== 'page') return;
     const ev = { kind: 'key', key };
     if (presenting()) applylocal(ev);
     else if (presenter) window.party.sendto(presenter, { t: 'stagectrl', ev });
@@ -1223,33 +1296,63 @@
   }
 
   async function picklink() {
-    const raw = await askurl();
-    if (!raw) return;
+    const pick = await askurl();
+    if (!pick) return;
+    if (pick.kind === 'window') return sharewindow(pick);
 
+    const raw = pick.url;
     const url = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
     setidle('Starting…');
     note(`sharing ${url}`);
 
     try {
-      if (window.media.iscapturing()) {
+      if (window.media.iscapturing() && window.media.isstage()) {
         await window.media.stagego(url);
       } else {
         const stream = await window.media.broadcaststart(url);
-        const mode = window.media.audiomode();
-        note(`capture up mode=${mode}`);
+        note(`capture up mode=${window.media.audiomode()}`);
         video.srcObject = stream;
-        video.muted = mode !== 'frame';
         video.classList.remove('hidden');
         startglow();
         play();
       }
 
       presenter = me();
+      stagekind = 'page';
+      applykind();
+      applyvolume();
       drive();
-      window.party.broadcast({ t: 'theatermedia', url });
+      window.party.broadcast({ t: 'theatermedia', url, kind: 'page' });
       setidle('');
+      setaway(false);
     } catch (e) {
       note(`share failed: ${e.message}`);
+      setidle(`Stream failed: ${e.message}`);
+    }
+  }
+
+
+  async function sharewindow(pick) {
+    setidle('Starting…');
+    note(`sharing window ${pick.name}`);
+
+    try {
+      const stream = await window.media.broadcastwindow(pick.id);
+      presenter = me();
+      stagekind = 'window';
+      undrive();
+      video.srcObject = stream;
+      video.classList.remove('hidden');
+      applykind();
+      applyvolume();
+      startglow();
+      play();
+      window.party.broadcast({ t: 'theatermedia', url: null, kind: 'window', name: pick.name });
+      setidle('');
+      setaway(true);
+      window.overlay.stagefocus?.(pick.id);
+    } catch (e) {
+      note(`window share failed: ${e.message}`);
       setidle(`Stream failed: ${e.message}`);
     }
   }
@@ -1260,17 +1363,21 @@
     if (!stream) return false;
     const track = stream.getVideoTracks()[0];
     if (!track) return false;
-    if (video.srcObject === stream) return true;
+    if (video.srcObject === stream) {
+      setidle('');
+      return true;
+    }
 
     note(`attaching ${stream.id.slice(0, 8)} muted=${track.muted}`);
     video.srcObject = stream;
-    video.muted = false;
     video.classList.remove('hidden');
+    applyvolume();
     lowlatency(stream);
     startglow();
     setidle(track.muted ? 'Waiting for frames…' : '');
     play();
-    drive();
+    if (stagekind === 'page') drive();
+    else undrive();
 
     track.addEventListener('unmute', () => { setidle(''); play(); });
     return true;
@@ -1436,7 +1543,7 @@
 
     figures.forEach(fig => {
       if (!fig.held) {
-        fig.vx = (fig.tx - fig.x) * 0.22;
+        fig.vx = (fig.tx - fig.x) * 0.22; 
         fig.x += fig.vx;
         fig.y += (fig.ty - fig.y) * 0.22;
         fig.av += fig.vx * 0.02;
@@ -1504,7 +1611,6 @@
     note('theater open');
 
     window.menu?.close();
-    if (window.browser?.isopen?.()) window.browser.toggle();
 
     buildcurtains();
     void curtains.offsetWidth;
@@ -1530,6 +1636,11 @@
     requestAnimationFrame(step);
     window.addEventListener('resize', relayout);
     setTimeout(relayout, 60);
+
+    onkey = (e) => {
+      if (e.key === 'Escape' && big) setbig(false);
+    };
+    window.addEventListener('keydown', onkey);
     if (presenter) starthunt();
   }
 
@@ -1559,6 +1670,16 @@
     if (video) { video.removeAttribute('src'); video.srcObject = null; }
 
     window.removeEventListener('resize', relayout);
+    if (onkey) window.removeEventListener('keydown', onkey);
+    onkey = null;
+    awaypill?.remove();
+    awaypill = null;
+    away = false;
+    big = false;
+    volbtn = null;
+    volslider = null;
+    fullbtn = null;
+    stagekind = 'page';
     figures.forEach(f => f.wrap.remove());
     figures.clear();
     tiers.length = 0;
@@ -1597,6 +1718,11 @@
         undrive();
       }
       presenter = from;
+      if (away) setaway(false);
+      stagekind = m.kind || 'page';
+      applykind();
+      if (stagekind !== 'page') undrive();
+      else if (video?.srcObject) drive();
       setidle('Waiting for the stream…');
       starthunt();
     }
@@ -1628,7 +1754,7 @@
   };
 })();
 
-// ---- right-click context menu ----
+
 (() => {
   const root = document.createElement('div');
   root.id = 'menuroot';
@@ -1747,7 +1873,7 @@
       { label: 'Add', children: shapes },
       { label: 'Draw', run: () => window.draw?.toggle() },
       {
-        label: 'Tabletop',
+        label: 'Activities',
         children: [
           {
             label: 'Throw Dice',
@@ -1757,13 +1883,8 @@
               { label: 'Roll 3', run: () => window.tabletop?.throwdice(x, y, 3) }
             ]
           },
-          { label: '8 Ball', run: () => window.pool?.request() }
-        ]
-      },
-      {
-        label: 'Activities',
-        children: [
-          { label: 'Browser', run: () => window.browser?.toggle() },
+          { label: '8 Ball', run: () => window.pool?.request() },
+          { label: 'Cards', run: () => window.cards?.request(x, y) },
           { label: 'Theater', run: () => window.theater?.request() }
         ]
       }
@@ -1791,12 +1912,24 @@
 
   function show(x, y) {
     const under = document.elementFromPoint(x, y);
-    if (under?.closest?.('.browser-card')) return;
     if (under?.closest?.('.th-screen')) return;
     if (under?.closest?.('.menu')) return;
 
+    let deck = null;
+    for (const hook of window.contexthooks || []) {
+      deck = hook(x, y);
+      if (deck) break;
+    }
+    if (deck === true) return;
+
     close();
     flag(true);
+
+    if (Array.isArray(deck)) {
+      window.physics?.deselect?.();
+      build(deck, x, y, 0);
+      return;
+    }
 
     const hit = window.physics?.pick?.(x, y);
     if (hit) {

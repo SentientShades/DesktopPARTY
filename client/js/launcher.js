@@ -3,7 +3,11 @@ const pick = (id) => document.getElementById(id);
 let myid = null;
 let mode = 'join';
 let host = null;
+
 let members = [];
+let faces = {};
+
+let myavatar = '';
 
 const colors = ['#23d18b','#3a8ef0','#ffd24a','#e0508c','#9b6cf0','#22c8c8','#f06a3a','#c0c0c0'];
 
@@ -16,7 +20,6 @@ function hashed(id) {
 function themed(p) {
   return p.accent || hashed(p.userid || p.displayName || 'guest');
 }
-
 function accent(hex) {
   document.documentElement.style.setProperty('--green', hex);
 }
@@ -30,11 +33,13 @@ pick('win-close').addEventListener('click', () => window.launcher.close());
 pick('win-min').addEventListener('click', () => window.launcher.minimize());
 
 document.querySelectorAll('[data-close]').forEach(btn => {
+
   btn.addEventListener('click', () => pick(btn.dataset.close).classList.add('hidden'));
 });
 
 pick('open-settings').addEventListener('click', () => pick('settings-sheet').classList.remove('hidden'));
 pick('open-profile').addEventListener('click', () => pick('profile-sheet').classList.remove('hidden'));
+
 
 function tohex(h, s, l) {
   const c = (1 - Math.abs(2 * l - 1)) * s;
@@ -57,6 +62,7 @@ function tohue(hex) {
   const [r, g, b] = m.slice(1).map(v => parseInt(v, 16) / 255);
   const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
   if (!d) return 0;
+
   let h;
   if (max === r)      h = ((g - b) / d) % 6;
   else if (max === g) h = (b - r) / d + 2;
@@ -79,20 +85,27 @@ function setmode(next) {
 pick('tab-join').addEventListener('click', () => setmode('join'));
 pick('tab-host').addEventListener('click', () => setmode('host'));
 
+
 pick('host-btn').addEventListener('click', async () => {
   const btn = pick('host-btn');
+  const lanonly = pick('host-lan').checked;
+
   btn.disabled = true;
-  btn.textContent = 'Starting tunnel…';
+  pick('host-lan').disabled = true;
+  btn.textContent = lanonly ? 'Starting…' : 'Starting tunnel…';
   status(pick('signin-status'), '');
 
   try {
-    host = await window.launcher.hoststart();
+    host = await window.launcher.hoststart({ lan: lanonly });
     pick('host-code').textContent = host.code;
     pick('host-info').classList.remove('hidden');
     btn.textContent = 'Hosting';
-    pick('host-hint').textContent = 'Your party is live. Sign in below to join it.';
+    pick('host-hint').textContent = host.lan
+      ? `Your party is live on this network only. Sign in below to join it.${host.ip ? ` If the code cant be found, friends can type ${host.ip} instead.` : ''}`
+      : 'Your party is live. Sign in below to join it.';
   } catch (e) {
     btn.disabled = false;
+    pick('host-lan').disabled = false;
     btn.textContent = 'Start hosting';
     status(pick('signin-status'), e.message, 'error');
   }
@@ -111,8 +124,11 @@ pick('banner-copy').addEventListener('click', () => {
 function enter() {
   pick('signin').classList.add('hidden');
   pick('home').classList.remove('hidden');
+  pick('win-close').classList.add('hidden');
+  window.launcher.getfaces().then(f => { faces = f || {}; draw(); });
 
   if (host) {
+    pick('banner-label').textContent = host.lan ? 'Hosting LAN' : 'Hosting';
     pick('banner-code').textContent = host.code;
     pick('hosting-banner').classList.remove('hidden');
   }
@@ -123,23 +139,35 @@ async function signin() {
   if (!userid) return status(pick('signin-status'), 'Enter a user ID first', 'error');
 
   let serverurl = null;
-
+  let code = null;
   if (mode === 'host') {
     if (!host) return status(pick('signin-status'), 'Start hosting first', 'error');
     serverurl = host.url;
+    code = host.code;
   } else {
-    const code = pick('join-code').value.trim();
+    code = pick('join-code').value.trim().toLowerCase();
     if (!code) return status(pick('signin-status'), 'Enter a party code', 'error');
-    serverurl = code.startsWith('ws://') || code.startsWith('wss://')
-      ? code
-      : `wss://${code}.trycloudflare.com`;
   }
 
   pick('go').disabled = true;
   status(pick('signin-status'), 'Connecting…');
 
+  if (mode !== 'host') {
+    const direct = /^(\d{1,3}(?:\.\d{1,3}){3})(?::(\d{2,5}))?$/.exec(code);
+    if (code.startsWith('ws://') || code.startsWith('wss://')) {
+      serverurl = code;
+      code = null;
+    } else if (direct) {
+      serverurl = `ws://${direct[1]}:${direct[2] || 8080}`;
+      code = null;
+    } else {
+      const local = await window.launcher.lanfind(code).catch(() => null);
+      serverurl = local || `wss://${code}.trycloudflare.com`;
+    }
+  }
+
   try {
-    await window.launcher.start({ userid, serverurl });
+    await window.launcher.start({ userid, serverurl, code });
     myid = userid;
     enter();
     await refresh();
@@ -157,8 +185,10 @@ async function refresh() {
   pick('me-name').textContent = p.displayName || p.userid;
   pick('display-name').value = p.displayName || '';
 
+  myavatar = p.avatar || '';
   const face = p.avatar ? `url('${p.avatar}')` : '';
   pick('me-avatar').style.backgroundImage = face;
+  draw();
   pick('avatar-preview').style.backgroundImage = face;
   pick('brand-avatar').style.backgroundImage = face;
   pick('brand-avatar').classList.toggle('has-avatar', !!p.avatar);
@@ -177,6 +207,7 @@ async function refresh() {
   accent(hex);
 }
 
+
 pick('pick-avatar').addEventListener('click', async () => {
   const url = await window.launcher.pickavatar();
   if (!url) return;
@@ -184,6 +215,8 @@ pick('pick-avatar').addEventListener('click', async () => {
   pick('me-avatar').style.backgroundImage = `url('${url}')`;
   pick('brand-avatar').style.backgroundImage = `url('${url}')`;
   pick('brand-avatar').classList.add('has-avatar');
+  myavatar = url;
+  draw();
   status(pick('profile-status'), 'Picture updated', 'ok');
 });
 
@@ -232,13 +265,17 @@ function draw() {
     const row = document.createElement('div');
     row.className = 'item';
 
+    const info = faces[name] || {};
+    const pic = name === myid ? (myavatar || info.avatar) : info.avatar;
+
     const av = document.createElement('span');
     av.className = 'avatar-sm online';
-    av.style.borderColor = name === myid ? themed({ userid: myid }) : hashed(name);
+    av.style.borderColor = info.color || (name === myid ? themed({ userid: myid }) : hashed(name));
+    if (pic) av.style.backgroundImage = `url('${pic}')`;
 
     const label = document.createElement('span');
     label.className = 'item-name';
-    label.textContent = name;
+    label.textContent = info.name || name;
 
     row.append(av, label);
     if (name === myid) {
@@ -257,18 +294,27 @@ window.launcher.onroster(r => {
   refresh();
 });
 
+window.launcher.onfaces(f => {
+  faces = f || {};
+  draw();
+});
+
 window.launcher.onerror(m => status(pick('status'), m.message, 'error'));
 
 window.launcher.onsessionended(() => {
   myid = null;
   host = null;
   members = [];
+  faces = {};
+  pick('win-close').classList.remove('hidden');
 
   pick('home').classList.add('hidden');
   pick('hosting-banner').classList.add('hidden');
   pick('host-info').classList.add('hidden');
   pick('host-btn').disabled = false;
+  pick('host-lan').disabled = false;
   pick('host-btn').textContent = 'Start hosting';
+  pick('host-hint').textContent = 'host the server on your pc';
   pick('go').disabled = false;
 
   pick('signin').classList.remove('hidden');
@@ -287,9 +333,15 @@ async function settings() {
   });
 
   const menubutton = pick('set-menuButton');
-  menubutton.value = store.settings.menuButton || 'right';
-  menubutton.addEventListener('change', () => {
-    window.launcher.setsetting('menuButton', menubutton.value);
+  const paintmenu = (value) => {
+    menubutton.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.value === value));
+  };
+  paintmenu(store.settings.menuButton || 'right');
+  menubutton.querySelectorAll('button').forEach(b => {
+    b.addEventListener('click', () => {
+      paintmenu(b.dataset.value);
+      window.launcher.setsetting('menuButton', b.dataset.value);
+    });
   });
 
   const server = pick('set-serverUrl');
@@ -297,12 +349,17 @@ async function settings() {
   server.addEventListener('change', () => {
     window.launcher.setsetting('serverUrl', server.value.trim());
   });
+  pick('server-reset').addEventListener('click', () => {
+    server.value = '';
+    window.launcher.setsetting('serverUrl', '');
+  });
 
   if (!input.send) pick('set-sendMyClicks').disabled = true;
   if (!input.receive) pick('set-allowRemoteClicks').disabled = true;
   if (!input.send || !input.receive) {
     pick('input-warn').textContent =
-      'Remote input needs native modules. Run: npm i uiohook-napi @nut-tree-fork/nut-js';
+      'Clicks need native modules. Run: npm i uiohook-napi @nut-tree-fork/nut-js';
+    pick('input-warn').classList.remove('hidden');
   }
 }
 
@@ -322,6 +379,7 @@ async function boot() {
   if (session.active && session.userid) {
     myid = session.userid;
     host = session.hosting || null;
+    if (host) pick('host-lan').checked = !!host.lan;
     enter();
     await refresh();
   } else {

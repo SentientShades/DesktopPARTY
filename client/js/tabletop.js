@@ -13,6 +13,7 @@
   const diefriction = 0.22;
   const dierestitution = 0.38;
   const diedamp = 0.07;
+
   const boundfriction = 0.4;
   const boundrestitution = 0.42;
 
@@ -20,6 +21,8 @@
   const authorityms = 4000;
   const revealholdms = 900;
   const revealfadems = 550;
+  const shrinkms = 420;
+  const badgelifems = 20000;
   const convergetravelms = 480;
   const forcesettlems = 9000;
   const boundxmargin = tablew / 2 + wallthick + 2;
@@ -53,23 +56,62 @@
   const uid = () => `${myid || 'x'}-d${Date.now().toString(36)}-${(seq++).toString(36)}`;
   const note = (t) => window.debuglog?.('out', 'tabletop', t);
 
-  // opposite faces of a standard die sum to 7: 1-6, 2-5, 3-4
-  // BoxGeometry face order is +x, -x, +y, -y, +z, -z
   const facevalues = [3, 4, 1, 6, 2, 5];
 
-  function pipcanvas(value) {
+  function parsehex(hex) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || '').trim());
+    const n = parseInt(m ? m[1] : '23d18b', 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(v => v / 255);
+  }
+
+  function tohsl([r, g, b]) {
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    const l = (max + min) / 2;
+    if (max === min) return [0, 0, l];
+    const d = max - min;
+    const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    let h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return [h * 60, s, l];
+  }
+
+  function fromhsl([h, s, l]) {
+    const k = (n) => (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1));
+    return [f(0), f(8), f(4)];
+  }
+
+  function lum(rgb) {
+    const lin = rgb.map(v => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)));
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+  }
+
+  function contrast(a, b) {
+    const x = lum(a), y = lum(b);
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+  }
+
+  function dicecolors(owner) {
+    const [h, sat, l] = tohsl(parsehex(window.party?.colorfor?.(owner)));
+    const body = fromhsl([h, sat * 0.6, Math.max(0.16, l * 0.72)]);
+    const dark = [0.08, 0.08, 0.08];
+    const pip = contrast(body, dark) < 4.5 ? [1, 1, 1] : dark;
+    const css = (rgb) => `rgb(${rgb.map(v => Math.round(v * 255)).join(',')})`;
+    return { body: css(body), pip: css(pip) };
+  }
+
+  function pipcanvas(value, colors) {
     const size = 128;
     const c = document.createElement('canvas');
     c.width = size;
     c.height = size;
     const ctx = c.getContext('2d');
 
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = colors.body;
     ctx.fillRect(0, 0, size, size);
     ctx.strokeStyle = 'rgba(0,0,0,.12)';
     ctx.lineWidth = 3;
     ctx.strokeRect(1.5, 1.5, size - 3, size - 3);
-
     const layouts = {
       1: [[0, 0]],
       2: [[-1, -1], [1, 1]],
@@ -83,7 +125,7 @@
     const cx = size / 2, cy = size / 2;
     const r = size * 0.09;
 
-    ctx.fillStyle = '#151515';
+    ctx.fillStyle = colors.pip;
     layouts[value].forEach(([gx, gy]) => {
       ctx.beginPath();
       ctx.arc(cx + gx * step, cy + gy * step, r, 0, Math.PI * 2);
@@ -109,9 +151,6 @@
     return shadowtex;
   }
 
-  // ---- sound: procedurally synthesized, no audio files ----
-  // this is an approximation (filtered noise shaped by impact/roll speed), not a
-  // recording; real dice have complex material transients this can only gesture at
 
   let actx = null;
   let noisebuf = null;
@@ -142,7 +181,7 @@
     const ctx = ensureaudio();
     if (!ctx) return;
     const s = Math.max(0, Math.min(1, strength));
-    if (s < 0.03) return;
+    if (s < 0.03) return; 
     lastimpactat = now;
 
     const src = ctx.createBufferSource();
@@ -207,7 +246,6 @@
   function startrolling(d) {
     const ctx = ensureaudio();
     if (!ctx || d.rollnode) return;
-
     const src = ctx.createBufferSource();
     src.buffer = noisebuffer(ctx);
     src.loop = true;
@@ -245,33 +283,8 @@
     setTimeout(() => { try { src.stop(); } catch {} }, 200);
   }
 
-  // >1 pushes colour away from luminance, boosting saturation
-  const satamount = 1.45;
-
-  function saturatematerial(material) {
-    material.onBeforeCompile = (shader) => {
-      shader.fragmentShader = shader.fragmentShader
-        .replace(
-          '#include <common>',
-          `#include <common>
-          vec3 boostsat(vec3 c, float s) {
-            float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-            return clamp(mix(vec3(l), c, s), 0.0, 1.0);
-          }`
-        )
-        .replace(
-          '#include <dithering_fragment>',
-          `#include <dithering_fragment>
-          gl_FragColor.rgb = boostsat(gl_FragColor.rgb, ${satamount.toFixed(2)});`
-        );
-    };
-    material.needsUpdate = true;
-    return material;
-  }
-
-  // ---- three.js / rapier scene ----
-
   function buildscene() {
+
     scene = new THREE.Scene();
 
     camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 100);
@@ -443,16 +456,14 @@
     const geo = RoundedBoxGeometry
       ? new RoundedBoxGeometry(size, size, size, 3, dieroundradius)
       : new THREE.BoxGeometry(size - dieroundradius, size - dieroundradius, size - dieroundradius);
-    // shiny dice: low roughness gives a tight specular highlight from the
-    // direct lights. metalness is kept low on purpose - there is no
-    // environment map in this scene, so a metallic surface has nothing to
-    // reflect and high metalness would just suppress diffuse and darken the
-    // faces rather than making them look glossier.
-    const mats = facevalues.map(v => saturatematerial(new THREE.MeshStandardMaterial({
-      map: new THREE.CanvasTexture(pipcanvas(v)),
-      roughness: 0.09,
-      metalness: 0.14
-    })));
+
+
+    const colors = dicecolors(owner);
+    const mats = facevalues.map(v => {
+      const map = new THREE.CanvasTexture(pipcanvas(v, colors));
+      map.colorSpace = THREE.SRGBColorSpace;
+      return new THREE.MeshStandardMaterial({ map, roughness: 0.09, metalness: 0.14 });
+    });
     const mesh = new THREE.Mesh(geo, mats);
     scene.add(mesh);
 
@@ -546,6 +557,7 @@
       'pointer-events:none', 'opacity:0', 'will-change:transform,opacity'
     ].join(';');
     document.body.appendChild(el);
+    setTimeout(() => el.remove(), badgelifems);
     return el;
   }
 
@@ -555,10 +567,17 @@
     d.badge.style.transform = `translate(${p.x.toFixed(1)}px, ${(p.y - 55).toFixed(1)}px) translate(-50%, -50%)`;
   }
 
+  function dropbadge(d) {
+    if (!d.badge) return;
+    d.badge.remove();
+    d.badge = null;
+  }
+
   function beginreveal(d) {
     d.value = readvalue(d.body);
     stoprolling(d);
 
+    dropbadge(d);
     d.badge = makebadge(d.value);
     positionbadge(d);
 
@@ -577,19 +596,23 @@
   }
 
   function beginfade(d) {
+    if (d.fading) return;
     d.fading = true;
     d.fadestart = performance.now();
-    d.badge?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: revealfadems, easing: 'ease-in', fill: 'forwards' });
+    const badge = d.badge;
+    if (badge) {
+      badge.animate([{ opacity: 1 }, { opacity: 0 }], { duration: revealfadems, easing: 'ease-in', fill: 'forwards' });
+      setTimeout(() => badge.remove(), revealfadems + 40);
+    }
     d.mesh.material.forEach(m => { m.transparent = true; });
     d.shadow.material.transparent = true;
-    const startop = d.shadow.material.opacity ?? 1;
-    const t0 = performance.now();
-    const fadeshadow = () => {
-      const t = Math.min(1, (performance.now() - t0) / revealfadems);
-      d.shadow.material.opacity = startop * (1 - t);
-      if (t < 1) requestAnimationFrame(fadeshadow);
-    };
-    fadeshadow();
+  }
+
+
+  function shrinkscale(t) {
+    if (t < 0.2) return 1 + (t / 0.2) * 0.12;
+    const k = (t - 0.2) / 0.8;
+    return 1.12 * (1 - k * k * (3 - 2 * k));
   }
 
   function batchdice(batchid) {
@@ -714,22 +737,31 @@
           updaterolling(d, Math.hypot(v.x, v.y, v.z) + Math.hypot(av.x, av.y, av.z) * 0.15);
         }
 
+        if (d.fading) {
+          const t = Math.min(1, (now - d.fadestart) / shrinkms);
+          const s = Math.max(0.001, shrinkscale(t));
+          d.mesh.scale.setScalar(s);
+          d.shadow.scale.setScalar(s);
+          d.mesh.material.forEach(m => { m.opacity = 1 - t * t; });
+          d.shadow.material.opacity = 1 - t;
+          if (t >= 1) removedie(d.id, false);
+          return;
+        }
+
         if (sleeping && !d.wassleeping && !d.settled) {
           d.settled = true;
           beginreveal(d);
         }
-        if (!sleeping) { d.settled = false; d.fading = false; }
+        if (!sleeping && d.settled) {
+          d.settled = false;
+          dropbadge(d);
+          startrolling(d);
+        }
         d.wassleeping = sleeping;
 
-        if (d.badge && !d.fading) positionbadge(d);
+        if (d.badge) positionbadge(d);
 
-        if (d.settled && !d.fading) maybeconverge(d.batchid, now);
-
-        if (d.fading) {
-          const t = Math.min(1, (now - d.fadestart) / revealfadems);
-          d.mesh.material.forEach(m => { m.opacity = 1 - t; });
-          if (t >= 1) removedie(d.id, false);
-        }
+        if (d.settled) maybeconverge(d.batchid, now);
       });
 
       if (now - lastshare > broadcastms) {
@@ -806,7 +838,8 @@
     }
     else if (m.t === 'dicestate') {
       const d = dice.get(m.id);
-      if (!d || (d.owner === myid && d.until > performance.now())) return;
+      if (!d || d.fading || (d.owner === myid && d.until > performance.now())) return;
+      if (d.settled && Math.hypot(m.vx, m.vy, m.vz) + Math.hypot(m.avx, m.avy, m.avz) * 0.15 < 0.6) return;
       d.owner = from;
       d.body.setTranslation({ x: m.x, y: m.y, z: m.z }, true);
       d.body.setRotation({ x: m.qx, y: m.qy, z: m.qz, w: m.qw }, true);

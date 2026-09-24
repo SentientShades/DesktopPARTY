@@ -9,10 +9,11 @@ function pathfor(node) {
   }
   if (node === document.body) return '/html/body';
   if (!node.parentNode) return '';
+
   let index = 1;
   let sib = node.previousSibling;
   while (sib) {
-    if (sib.nodeType === 1 && sib.tagName === node.tagName) index++;
+    if (sib.nodeType === 1 && sib.tagName === node.tagName) index++; // only count same tag siblings
     sib = sib.previousSibling;
   }
   return pathfor(node.parentNode) + `/${node.tagName.toLowerCase()}[${index}]`;
@@ -25,7 +26,7 @@ function nodefor(path) {
   } catch { return null; }
 }
 
-let applying = false;
+let applying = false; // guards against feedback loop when we apply a remote scroll/selection
 
 document.addEventListener('scroll', () => {
   if (applying) return;
@@ -41,12 +42,13 @@ document.addEventListener('selectionchange', () => {
   }
   try {
     const range = sel.getRangeAt(0);
+
     ipcRenderer.sendToHost('bw:selection', {
       anchorpath: pathfor(range.startContainer),
       anchoroffset: range.startOffset,
       focuspath: pathfor(range.endContainer),
       focusoffset: range.endOffset,
-      text: sel.toString().slice(0, 400)
+      text: sel.toString().slice(0, 400) // cap payload size
     });
   } catch {}
 });
@@ -69,6 +71,7 @@ ipcRenderer.on('bw:apply-selection', (_e, sel) => {
         const range = document.createRange();
         const amax = anchor.length ?? anchor.childNodes.length;
         const fmax = focus.length ?? focus.childNodes.length;
+
         range.setStart(anchor, Math.min(sel.anchoroffset, amax));
         range.setEnd(focus, Math.min(sel.focusoffset, fmax));
         target.addRange(range);
@@ -78,8 +81,9 @@ ipcRenderer.on('bw:apply-selection', (_e, sel) => {
   setTimeout(() => { applying = false; }, 50);
 });
 
+
 let syncing = false;
-const watched = new WeakSet();
+const watched = new WeakSet(); // avoid double binding listeners on rescan
 
 function attach(v) {
   if (watched.has(v)) return;
@@ -106,14 +110,14 @@ function scan() {
 }
 
 scan();
-new MutationObserver(scan).observe(document.documentElement, { childList: true, subtree: true });
+new MutationObserver(scan).observe(document.documentElement, { childList: true, subtree: true }); ///// catches lazy loaded players
 
 ipcRenderer.on('bw:apply-video', (_e, { action, at }) => {
   const v = document.querySelector('video');
   if (!v) return;
   syncing = true;
 
-  if (Math.abs(v.currentTime - at) > 0.6) v.currentTime = at;
+  if (Math.abs(v.currentTime - at) > 0.6) v.currentTime = at; // small drift tolerance, avoid jitter!!
   if (action === 'play') v.play().catch(() => {});
   if (action === 'pause') v.pause();
 

@@ -4,11 +4,11 @@ const path = require('path');
 const os = require('os');
 const net = require('net');
 const http = require('http');
+const dgram = require('dgram');
 const { spawn, execSync } = require('child_process');
 const WebSocket = require('ws');
 const { WebSocketServer } = require('ws');
 
-// ---- persisted profile + settings ----
 const store = (() => {
   const dir  = app.getPath('userData');
   const file = path.join(dir, 'desktopfriends.json');
@@ -17,6 +17,7 @@ const store = (() => {
   const defaults = {
     userId: '',
     profile: { displayName: '', avatar: '', accent: '', characterImage: '' },
+
     settings: {
       showNames: true,
       allowRemoteClicks: false,
@@ -75,7 +76,6 @@ const store = (() => {
     save();
     return data.profile;
   }
-
   function setsetting(key, value) {
     if (!(key in defaults.settings)) return data.settings;
     data.settings[key] = value;
@@ -88,8 +88,8 @@ const store = (() => {
   return { getall, getprofile, setuserid, setprofile, setsetting, file };
 })();
 
-// ---- global mouse hook + remote click injection ----
 const input = (() => {
+
   let hook = null;
   let nut = null;
 
@@ -153,7 +153,6 @@ const input = (() => {
   return { available, start, stop, setleft, setright, setmenubutton, inject };
 })();
 
-// ---- presence + signal websockets (client side) ----
 const presence = (() => {
   const pingms = 15000;
   const maxwait = 30000;
@@ -161,6 +160,7 @@ const presence = (() => {
   let sock, sigsock;
   let sockping = null, sigping = null;
   let sockwait = 1000, sigwait = 1000;
+
   let handlers = {};
   let closing = false;
 
@@ -254,7 +254,7 @@ const presence = (() => {
 
   function sendsignal(msg) {
     if (sigsock?.readyState === WebSocket.OPEN) sigsock.send(JSON.stringify(msg));
-    else sigqueue.push(msg);
+    else if (msg?.type !== 'relay') sigqueue.push(msg);
   }
 
   function disconnect() {
@@ -277,7 +277,6 @@ const presence = (() => {
   return { connect, send, connectsignal, sendsignal, disconnect };
 })();
 
-// ---- toast bridge to the overlay window ----
 const toasts = (() => {
   let win = null;
   let ready = false;
@@ -301,7 +300,6 @@ const toasts = (() => {
   return { attach, show };
 })();
 
-// ---- active-window detection for rich presence ----
 const activity = (() => {
   let winmod = null;
   try { winmod = require('get-windows'); }
@@ -370,7 +368,6 @@ const activity = (() => {
   return { start, stop, available };
 })();
 
-// ---- discord rich presence over the local ipc pipe ----
 const discord = (() => {
   const ops = { handshake: 0, frame: 1, close: 2, ping: 3, pong: 4 };
 
@@ -501,7 +498,7 @@ const discord = (() => {
   return { start, setactivity, clearactivity, stop };
 })();
 
-// ---- cloudflared tunnel for hosting a party ----
+
 const tunnel = (() => {
   let proc = null;
 
@@ -588,7 +585,6 @@ const tunnel = (() => {
   return { start, stop, isrunning: () => !!proc };
 })();
 
-// ---- local presence/signal server for hosting ----
 const localserver = (() => {
   const maxparty = 8;
 
@@ -705,6 +701,11 @@ const localserver = (() => {
       msg.from = userid;
       const target = signals.get(msg.to);
 
+      if (msg.type === 'relay') {
+        if (target) send(target, msg);
+        return;
+      }
+
       if (target) {
         console.log(`[host] signal ${msg.type}: ${userid} -> ${msg.to}  OK`);
         send(target, msg);
@@ -795,4 +796,154 @@ const localserver = (() => {
   return { start, stop, isrunning: () => !!server };
 })();
 
-module.exports = { store, input, presence, toasts, activity, discord, tunnel, localserver };
+const lan = (() => {
+
+  const port = 41234;
+  const words = [
+    'apple', 'bagel', 'banjo', 'beach', 'berry', 'blimp', 'bongo', 'brick',
+    'bubble', 'cactus', 'candle', 'cloud', 'cobra', 'comet', 'cookie', 'coral',
+    'crumb', 'daisy', 'dingo', 'donut', 'dragon', 'falcon', 'fern', 'fizzy',
+    'frog', 'gecko', 'ghost', 'goblin', 'grape', 'hippo', 'honey', 'igloo',
+    'jelly', 'kazoo', 'kiwi', 'koala', 'lemon', 'llama', 'mango', 'marble',
+    'melon', 'moose', 'muffin', 'nacho', 'noodle', 'otter', 'panda', 'pepper',
+    'pickle', 'pixel', 'pizza', 'plum', 'potato', 'puffin', 'quartz', 'radish',
+    'robot', 'rocket', 'sprout', 'taco', 'toast', 'tulip', 'waffle', 'yeti'
+  ];
+
+  let host = null;
+  let hostcode = null;
+  let hostport = 0;
+
+
+  function makecode() {
+    const pick = () => words[Math.floor(Math.random() * words.length)];
+    return [pick(), pick(), pick(), pick()].join('-');
+  }
+
+  function clean(code) {
+    return String(code || '').trim().toLowerCase();
+  }
+
+  function targets() {
+    const out = new Set(['255.255.255.255']);
+    Object.values(os.networkInterfaces()).flat().forEach(i => {
+      if (!i || i.internal || (i.family !== 'IPv4' && i.family !== 4)) return;
+      const ip = i.address.split('.').map(Number);
+      const mask = i.netmask.split('.').map(Number);
+      if (ip.length !== 4 || mask.length !== 4) return;
+      out.add(ip.map((n, k) => (n & mask[k]) | (~mask[k] & 255)).join('.'));
+    });
+    return [...out];
+  }
+
+  function start(code, serverport) {
+    return new Promise((resolve, reject) => {
+      if (host) stop();
+
+      hostcode = clean(code);
+      hostport = serverport;
+      host = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+
+      host.on('message', (raw, rinfo) => {
+        let msg;
+        try { msg = JSON.parse(raw.toString()); } catch { return; }
+        if (msg.t !== 'dpfind' || clean(msg.code) !== hostcode) return;
+
+        const reply = Buffer.from(JSON.stringify({ t: 'dphere', code: hostcode, port: hostport }));
+        host.send(reply, rinfo.port, rinfo.address);
+      });
+
+      host.once('error', (e) => {
+        stop();
+        reject(new Error(e.code === 'EADDRINUSE' ? `LAN port ${port} is already in use` : e.message));
+      });
+
+      host.bind(port, '0.0.0.0', () => {
+        console.log(`[lan] answering for ${hostcode} on udp ${port}`);
+        resolve();
+      });
+    });
+  }
+
+  function find(code, waitms = 1000) {
+    return new Promise((resolve) => {
+      const wanted = clean(code);
+      const sock = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+
+      let done = false;
+      let pinger = null;
+
+      const finish = (result) => {
+        if (done) return;
+        done = true;
+        clearInterval(pinger);
+        clearTimeout(timer);
+        try { sock.close(); } catch {}
+        resolve(result);
+      };
+
+      const timer = setTimeout(() => finish(null), waitms);
+
+      sock.on('message', (raw, rinfo) => {
+        let msg;
+        try { msg = JSON.parse(raw.toString()); } catch { return; }
+        if (msg.t !== 'dphere' || clean(msg.code) !== wanted) return;
+        finish(`ws://${rinfo.address}:${msg.port}`);
+      });
+
+      sock.on('error', () => finish(null));
+
+      sock.bind(0, () => {
+        try { sock.setBroadcast(true); } catch {}
+        const query = Buffer.from(JSON.stringify({ t: 'dpfind', code: wanted }));
+        const shout = () => targets().forEach(addr => {
+          sock.send(query, port, addr, () => {});
+        });
+        shout();
+        pinger = setInterval(shout, 250);
+      });
+    });
+  }
+
+  function stop() {
+    try { host?.close(); } catch {}
+    host = null;
+    hostcode = null;
+    hostport = 0;
+  }
+
+  function guessip() {
+    const list = Object.entries(os.networkInterfaces()).flatMap(([name, all]) => (all || []).map(i => ({ name, ...i })));
+    const good = list.filter(i => !i.internal && (i.family === 'IPv4' || i.family === 4) && !i.address.startsWith('169.254.'));
+    const real = good.filter(i => !/vethernet|virtual|vmware|vbox|hyper-v|wsl|docker|tailscale|zerotier|hamachi|loopback/i.test(i.name));
+    return (real[0] || good[0])?.address || null;
+  }
+
+  function address() {
+    return new Promise((resolve) => {
+      let sock;
+      try { sock = dgram.createSocket('udp4'); }
+      catch { return resolve(guessip()); }
+
+      const finish = (ip) => {
+        try { sock.close(); } catch {}
+        resolve(ip && ip !== '0.0.0.0' ? ip : guessip());
+      };
+
+      sock.once('error', () => finish(null));
+      try {
+        sock.connect(53, '8.8.8.8', () => {
+          let ip = null;
+          try { ip = sock.address().address; } catch {}
+          finish(ip);
+        });
+      } catch {
+        finish(null);
+      }
+    });
+  }
+
+  return { makecode, start, find, stop, address, isrunning: () => !!host };
+})();
+
+module.exports = { store, input, presence, toasts, activity, discord, tunnel, localserver, lan };

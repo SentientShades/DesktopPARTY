@@ -1,6 +1,6 @@
 {
   "name": "DesktopPARTY!",
-  "version": "0.3.2",
+  "version": "0.3.6",
   "description": "DesktopPARTY!",
   "main": "js/main.js",
   "author": "SENTI",
@@ -55,7 +55,10 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "shortcutName": "DesktopPARTY!"
+      "shortcutName": "DesktopPARTY!",
+      "installerIcon": "assets/appicon_512x512.ico",
+      "uninstallerIcon": "assets/appicon_512x512.ico",
+      "installerHeaderIcon": "assets/appicon_512x512.ico"
     }
   }
 }

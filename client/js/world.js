@@ -1,4 +1,4 @@
-// ---- party mesh (webrtc cursors, profiles, datachannels) ----
+
 (() => {
   const ice = {
     iceServers: [
@@ -10,6 +10,7 @@
   };
 
   const sendms = 33;
+  const relayms = 3500;
   const smoothing = 0.25;
   const colors = ['#23d18b','#3a8ef0','#ffd24a','#e0508c','#9b6cf0','#22c8c8','#f06a3a','#c0c0c0'];
 
@@ -17,6 +18,7 @@
   let profile = { userid: '', displayName: '', avatar: '', accent: '', characterImage: '' };
   let doing = '';
   let joined = false;
+
   let settings = {
     showNames: true,
     allowRemoteClicks: false,
@@ -89,7 +91,8 @@
 
     const pc = new RTCPeerConnection(ice);
     const entry = {
-      pc, channel: null, ctrl: null, bulk: null, outbox: [],
+      id, pc, channel: null, ctrl: null, bulk: null, outbox: [],
+      relay: false, relaytimer: null,
       videosender: null, audiosender: null, instream: null,
       remoteset: false, waiting: [],
       polite: false, makingoffer: false, ignoring: false,
@@ -98,6 +101,7 @@
     };
     entry.polite = String(myid) > String(id);
     peers.set(id, entry);
+    entry.relaytimer = setTimeout(() => startrelay(id), relayms);
 
     pc.onnegotiationneeded = async () => {
       try {
@@ -142,6 +146,36 @@
     };
     return entry;
   }
+
+  function relay(id, text) {
+    window.overlay.signal({ to: id, type: 'relay', data: text });
+  }
+
+  function startrelay(id) {
+    const entry = peers.get(id);
+    if (!entry || entry.relay || entry.ctrl?.readyState === 'open') return;
+    entry.relay = true;
+    console.log(`[peer] direct link to ${id} is slow, relaying through the host`);
+
+    entry.outbox.splice(0).forEach(text => relay(id, text));
+    relay(id, JSON.stringify({
+      t: 'p',
+      displayName: profile.displayName,
+      avatar: profile.avatar,
+      accent: profile.accent,
+      characterImage: profile.characterImage
+    }));
+    relay(id, JSON.stringify({ t: 'a', text: doing }));
+
+    entry.el.style.opacity = 1;
+    window.physics?.onpeer(id);
+    render();
+  }
+
+  const linked = (id) => {
+    const e = peers.get(id);
+    return !!e && (e.ctrl?.readyState === 'open' || e.relay);
+  };
 
   function handle(entry, id, m) {
       if (m.t !== 'c') window.debuglog?.('in', m.t, m, id);
@@ -214,7 +248,6 @@
       }));
       dc.send(JSON.stringify({ t: 'a', text: doing }));
 
-      window.browser?.onpeer(id);
       window.physics?.onpeer(id);
       render();
     };
@@ -308,6 +341,7 @@
     if (!entry) return;
     clearTimeout(retries.get(id));
     retries.delete(id);
+    clearTimeout(entry.relaytimer);
     entry.channel?.close();
     entry.pc.close();
     entry.el.remove();
@@ -352,24 +386,30 @@
     if (attempt < 4) {
       retries.set(id, setTimeout(() => {
         const p = peers.get(id);
-        if (p?.channel?.readyState === 'open') return;
+        if (p?.channel?.readyState === 'open' || p?.relay) return;
         console.log(`[peer] retrying invite to ${id} (attempt ${attempt + 1})`);
         invite(id, attempt + 1);
       }, 5000));
     }
   }
 
-  const lossy = new Set(['c', 'k', 'objstate', 'plu']);
+  const lossy = new Set(['c', 'k', 'objstate', 'plu']); 
 
   function post(entry, payload, text) {
     if (!lossy.has(payload.t)) window.debuglog?.('out', payload.t, payload);
     if (lossy.has(payload.t)) {
       if (entry.channel?.readyState === 'open') entry.channel.send(text);
+      else if (entry.relay) relay(entry.id, text);
       return;
     }
 
     if (entry.ctrl?.readyState === 'open') {
       entry.ctrl.send(text);
+      return;
+    }
+
+    if (entry.relay) {
+      relay(entry.id, text);
       return;
     }
 
@@ -514,18 +554,47 @@
     stack.innerHTML = '';
     ids.slice(0, 5).forEach(id => {
       const face = document.createElement('div');
-      const open = peers.get(id)?.ctrl?.readyState === 'open';
+      const open = linked(id);
       face.className = `pp-face${open ? '' : ' pending'}`;
       face.style.setProperty('--face-color', colorfor(id));
       const av = profiles.get(id)?.avatar;
       if (av) face.style.backgroundImage = `url('${av}')`;
       stack.appendChild(face);
     });
+
+    sendfaces(ids);
+  }
+
+
+  let lastfaces = '';
+
+  function sendfaces(ids) {
+    const faces = {};
+    [myid, ...ids].forEach(id => {
+      const mine = id === myid;
+      faces[id] = {
+        name: mine ? (profile.displayName || myid) : namefor(id),
+        avatar: mine ? (profile.avatar || '') : (profiles.get(id)?.avatar || ''),
+        color: colorfor(id)
+      };
+    });
+    const text = JSON.stringify(faces);
+    if (text === lastfaces) return;
+    lastfaces = text;
+    window.overlay.faces?.(faces);
   }
 
   window.overlay.onsignal(async (msg) => {
     const from = msg.from;
     try {
+      if (msg.type === 'relay') {
+        if (!from || from === myid || typeof msg.data !== 'string') return;
+        const entry = peers.get(from) || makepeer(from);
+        if (!entry.relay) startrelay(from);
+        parse(entry, from, { data: msg.data });
+        return;
+      }
+
       if (msg.type === 'offer') {
         if (!msg.sdp?.sdp) return;
 
@@ -614,7 +683,7 @@
 
     if (joined) {
       list.forEach(id => {
-        if (peers.get(id)?.channel?.readyState === 'open') return;
+        if (peers.get(id)?.channel?.readyState === 'open' || peers.get(id)?.relay) return;
         if (myid < id) invite(id);
       });
     } else {
@@ -683,13 +752,13 @@
         avatar: p.avatar || '',
         character: p.characterImage || '',
         activity: doings.get(id) || '',
-        state: peers.get(id)?.ctrl?.readyState === 'open' ? '' : 'connecting…'
+        state: linked(id) ? '' : 'connecting…'
       };
     }
   };
 })();
 
-// ---- draggable player characters ----
+
 (() => {
   const width = 34;
   const height = 52;
@@ -963,7 +1032,7 @@
   };
 })();
 
-// ---- shared physics world (matter.js) ----
+
 (() => {
   const { Engine, Bodies, Body, Composite, Constraint, Sleeping, Events } = Matter;
 
@@ -1045,6 +1114,7 @@
   let ink = [];
   let inkqueued = false;
 
+ 
   function buildink() {
     if (!window.draw?.isink) return;
 
@@ -1100,6 +1170,46 @@
     for (const pair of e.pairs) contact(pair.bodyA, pair.bodyB);
   });
 
+  function outline(shape, hw, hh) {
+    if (shape === 'ball') {
+      const sides = Math.ceil(Math.max(14, Math.min(40, hw * 0.9)));
+      const pts = [];
+      for (let i = 0; i < sides; i++) {
+        const a = (i / sides) * Math.PI * 2;
+        pts.push({ x: Math.cos(a) * hw, y: Math.sin(a) * hw });
+      }
+      return pts;
+    }
+
+    if (shape === 'triangle') {
+      return [
+        { x: 0, y: -hh * 4 / 3 },
+        { x: hw, y: hh * 2 / 3 },
+        { x: -hw, y: hh * 2 / 3 }
+      ];
+    }
+    return [
+      { x: -hw, y: -hh },
+      { x: hw, y: -hh },
+      { x: hw, y: hh },
+      { x: -hw, y: hh }
+    ];
+  }
+
+
+  function offsetof(shape, hh) {
+    return shape === 'triangle' ? -hh / 3 : 0;
+  }
+
+  function centerof(o) {
+    const off = offsetof(o.shape, o.hh);
+    const a = o.body.angle;
+    return {
+      x: o.body.position.x - Math.sin(a) * off,
+      y: o.body.position.y + Math.cos(a) * off
+    };
+  }
+
   const isgrounded = (p) => performance.now() - (p.grounded || 0) < grace;
   const istouching = (p) => performance.now() - (p.touched || 0) < grace;
 
@@ -1115,20 +1225,18 @@
     el.style.setProperty('--obj-color', color);
     layer.appendChild(el);
 
-    const opts = {
+    const body = Body.create({
       friction: 0.75,
       frictionStatic: 1.1,
       frictionAir: 0.006,
       restitution: bounce,
       density: 0.0022,
       sleepThreshold: 40,
-      label: 'obj'
-    };
-
-    let body;
-    if (shape === 'ball') body = Bodies.circle(x, y, halfw, opts);
-    else if (shape === 'triangle') body = Bodies.polygon(x, y, 3, halfw, opts);
-    else body = Bodies.rectangle(x, y, halfw * 2, halfh * 2, opts);
+      label: 'obj',
+      position: { x, y },
+      vertices: outline(shape, halfw, halfh)
+    });
+    if (shape === 'ball') body.circleRadius = halfw;
 
     Composite.add(engine.world, body);
 
@@ -1150,6 +1258,7 @@
     return o;
   }
 
+
   function recover(body) {
     if (!body || body.isStatic) return;
     const p = body.position;
@@ -1164,8 +1273,9 @@
 
   function draw(o) {
     recover(o.body);
+    const c = centerof(o);
     o.el.style.transform =
-      `translate(${(o.body.position.x - o.hw).toFixed(1)}px, ${(o.body.position.y - o.hh).toFixed(1)}px) ` +
+      `translate(${(c.x - o.hw).toFixed(1)}px, ${(c.y - o.hh).toFixed(1)}px) ` +
       `rotate(${(o.body.angle * 180 / Math.PI).toFixed(2)}deg)`;
   }
 
@@ -1213,17 +1323,29 @@
       ? nextw
       : Math.max(minhalf, Math.min(maxhalf, hh));
 
-    const sx = nextw / o.hw;
-    const sy = nexth / o.hh;
-    if (!Number.isFinite(sx) || !Number.isFinite(sy) || sx <= 0 || sy <= 0) return;
+    if (!Number.isFinite(nextw) || !Number.isFinite(nexth)) return;
+    if (nextw === o.hw && nexth === o.hh) return;
 
+    const keep = centerof(o);
+    const angle = o.body.angle;
     const wasstatic = o.body.isStatic;
     if (wasstatic) Body.setStatic(o.body, false);
-    Body.scale(o.body, sx, sy);
-    if (wasstatic) Body.setStatic(o.body, true);
+
+    Body.setAngle(o.body, 0);
+    Body.setVertices(o.body, outline(o.shape, nextw, nexth));
+    Body.setAngle(o.body, angle);
+    if (o.shape === 'ball') o.body.circleRadius = nextw;
 
     o.hw = nextw;
     o.hh = nexth;
+
+    const off = offsetof(o.shape, nexth);
+    Body.setPosition(o.body, {
+      x: keep.x + Math.sin(angle) * off,
+      y: keep.y - Math.cos(angle) * off
+    });
+    if (wasstatic) Body.setStatic(o.body, true);
+
     o.el.style.width = nextw * 2 + 'px';
     o.el.style.height = nexth * 2 + 'px';
 
@@ -1348,6 +1470,7 @@
       entity.history.shift();
     }
   }
+
 
   function enddrag(entity, x, y) {
     release(entity);
@@ -1509,8 +1632,9 @@
     const h = selected.hh * 2 + pad * 2;
     marquee.style.width = w + 'px';
     marquee.style.height = h + 'px';
+    const c = centerof(selected);
     marquee.style.transform =
-      `translate(${(selected.body.position.x - w / 2).toFixed(1)}px, ${(selected.body.position.y - h / 2).toFixed(1)}px) ` +
+      `translate(${(c.x - w / 2).toFixed(1)}px, ${(c.y - h / 2).toFixed(1)}px) ` +
       `rotate(${(selected.body.angle * 180 / Math.PI).toFixed(2)}deg)`;
   }
 
@@ -1523,7 +1647,6 @@
       line.className = `axisline axis${axis}`;
       const knob = document.createElement('div');
       knob.className = `axis axis${axis} interactive`;
-      knob.textContent = axis === 'x' ? '↔' : '↕';
       handles.append(line, knob);
       arms.push({ axis, line, knob });
       bindarm(arms[arms.length - 1]);
@@ -1543,7 +1666,7 @@
 
   function paintarms() {
     if (!selected || !sizing) return;
-    const pos = selected.body.position;
+    const pos = centerof(selected);
     const angle = selected.body.angle;
 
     arms.forEach(a => {
@@ -1571,14 +1694,15 @@
       window.overlay.playeractive?.(true);
 
       const move = (ev) => {
-        const pos = o.body.position;
+        const pos = centerof(o);
         const angle = o.body.angle;
         const dir = arm.axis === 'x' ? angle : angle - Math.PI / 2;
         const dx = ev.clientX - pos.x;
         const dy = ev.clientY - pos.y;
         const along = Math.abs(dx * Math.cos(dir) + dy * Math.sin(dir)) - 34;
 
-        if (arm.axis === 'x') resize(o, along, o.hh);
+        if (o.shape === 'ball') resize(o, along, along);
+        else if (arm.axis === 'x') resize(o, along, o.hh);
         else resize(o, o.hw, along);
 
         paintselection();

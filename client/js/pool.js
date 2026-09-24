@@ -14,23 +14,21 @@
   const maxdragworld = 3.2;
   const movingeps = 0.03;
 
-
   const modelplayfracx = 0.789;
   const modelplayfracz = 0.886;
 
-
   const satamount = 1.45;
 
+  const stripepx = 30.0;
 
-  const stripepx = 74.0;
-
+  const graymix = 0.85;
+  const graydim = 0.55;
 
   const maxrolldelta = 1.2;
 
-
-
   const pocketholer = 0.60;
-  const pocketstroker = 0.72;
+  const holer = pocketr * 1.3;
+  const holesolid = 0.84;
 
   const closems = 900;
   const holdms = 1000;
@@ -43,7 +41,7 @@
   let scene = null, camera = null, renderer = null, canvas = null;
   let world = null, eventqueue = null;
   let raycaster = null, tableplane = null;
-  let tablemodel = null, customtableloaded = false;
+  let tablemodel = null, customtableloaded = false, feltinfo = null;
   let floory = -railh - 0.35;
 
   let root = null, curtains = null, hud = null, trajsvg = null, trajline = null, trajline2 = null;
@@ -65,6 +63,7 @@
   let assign = { a: null, b: null };
   let ballinhand = false;
   let winner = null;
+  let over = false;
   let shooter = null;
   let moving = false;
   let potthisshot = [];
@@ -76,13 +75,12 @@
 
   const note = (t) => window.debuglog?.('out', 'pool', t);
   const me = () => myid;
-  const myturn = () => open && !winner && order[turnidx] === myid && !moving;
+  const myturn = () => open && !winner && !over && order[turnidx] === myid && !moving;
+  const authority = () => (moving ? shooter : order[turnidx]);
 
   function teamof(id) {
     return teams.a.includes(id) ? 'a' : (teams.b.includes(id) ? 'b' : null);
   }
-
-
 
   function woodtexture(THREE) {
     const c = document.createElement('canvas');
@@ -162,8 +160,6 @@
 
     return new THREE.CanvasTexture(c);
   }
-
-
 
   let actx = null;
   let noisebuf = null;
@@ -269,19 +265,15 @@
     }
   }
 
-  // ---- scene ----
-
   function orthoframe() {
-    const aspect = window.innerWidth / window.innerHeight;
-    // the camera looks straight down with up=(1,0,0), so world X maps to the
-    // screen's vertical axis and world Z to its horizontal axis. fit whichever
-    // axis is the binding constraint so the table fills as much of the screen
-    // as it can without clipping on any aspect ratio.
-    const margin = 1.04;
-    const halfx = (tablex / modelplayfracx) / 2;
-    const halfz = (tablez / modelplayfracz) / 2;
-    const viewh = Math.max(halfx, halfz / aspect) * margin;
-    return { left: -viewh * aspect, right: viewh * aspect, top: viewh, bottom: -viewh };
+    const w = window.innerWidth, h = window.innerHeight;
+    const top = 118, bottom = 30, side = 30;
+
+    const halfx = (tablex / modelplayfracx) / 2 * 1.02;
+    const halfz = (tablez / modelplayfracz) / 2 * 1.02;
+    const upp = Math.max((halfx * 2) / Math.max(100, h - top - bottom), (halfz * 2) / Math.max(100, w - side * 2));
+    const shift = ((top - bottom) / 2) * upp;
+    return { left: -(w / 2) * upp, right: (w / 2) * upp, top: (h / 2) * upp + shift, bottom: -(h / 2) * upp + shift };
   }
 
   function buildscene() {
@@ -334,14 +326,6 @@
   }
 
   function buildtable() {
-    const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(tablex + 8, tablez + 10),
-      saturatematerial(new THREE.MeshStandardMaterial({ map: woodtexture(THREE), roughness: 0.85 }))
-    );
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.y = floory;
-    scene.add(floor);
-
     if (!customtableloaded) {
       const felt = new THREE.Mesh(
         new THREE.PlaneGeometry(tablex, tablez),
@@ -363,8 +347,6 @@
       );
       bycollider.set(collider.handle, { kind: 'rail' });
 
-      // stock box+nose rail visuals only; a loaded custom table model already
-      // renders its own rails/sides, physics colliders above stay either way
       if (customtableloaded) return;
 
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(hx * 2, railh, hz * 2), railmat);
@@ -397,38 +379,76 @@
       );
       bycollider.set(collider.handle, { kind: 'pocket' });
 
-      // the loaded model renders its own pocket surrounds, so the stock
-      // brown ring is only drawn for the fallback table
-      if (!customtableloaded) {
-        const outer = new THREE.Mesh(
-          new THREE.CircleGeometry(pocketr * 1.22, 24),
-          new THREE.MeshStandardMaterial({ color: 0x1a0d06, roughness: 0.8 })
-        );
-        outer.rotation.x = -Math.PI / 2;
-        outer.position.set(x, 0.008, z);
-        scene.add(outer);
+      if (customtableloaded && feltinfo?.material) {
+        const geo = new THREE.CircleGeometry(pocketholer + 0.04, 48);
+        const patchmat = saturatematerial(new THREE.MeshStandardMaterial({
+          color: feltcolor(feltinfo),
+          roughness: feltinfo.material.roughness ?? 0.9,
+          metalness: feltinfo.material.metalness ?? 0,
+          alphaMap: softtexture(0.8),
+          transparent: true,
+          depthWrite: false
+        }));
+        const patch = new THREE.Mesh(geo, patchmat);
+        patch.rotation.x = -Math.PI / 2;
+        patch.position.set(x, 0.01, z);
+        scene.add(patch);
       }
 
-      const holer = customtableloaded ? pocketholer : pocketr;
-      const rim = new THREE.Mesh(
-        new THREE.CircleGeometry(holer, 32),
-        new THREE.MeshBasicMaterial({ color: 0x020202 })
+      const hole = new THREE.Mesh(
+        new THREE.CircleGeometry(holer, 48),
+        new THREE.MeshBasicMaterial({ color: 0x030303, alphaMap: softtexture(holesolid), transparent: true, depthWrite: false })
       );
-      rim.rotation.x = -Math.PI / 2;
-      rim.position.set(x, 0.014, z);
-      scene.add(rim);
-
-      // flat 2d stroke around the hole, drawn on top so the opening reads as
-      // a crisp circle against the model's moulded pocket rather than a soft
-      // dark blob that never quite lines up
-      const stroke = new THREE.Mesh(
-        new THREE.RingGeometry(holer, customtableloaded ? pocketstroker : pocketr * 1.16, 40),
-        new THREE.MeshBasicMaterial({ color: 0x120a05, transparent: true, opacity: 0.95, side: THREE.DoubleSide })
-      );
-      stroke.rotation.x = -Math.PI / 2;
-      stroke.position.set(x, 0.016, z);
-      scene.add(stroke);
+      hole.rotation.x = -Math.PI / 2;
+      hole.position.set(x, 0.014, z);
+      scene.add(hole);
     });
+  }
+
+  const softtex = new Map();
+  const accentu = { value: null };
+  let placemat = null;
+  let lastaccent = '';
+
+  function softtexture(solid) {
+    if (softtex.has(solid)) return softtex.get(solid);
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const ctx = c.getContext('2d');
+    const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+    g.addColorStop(0, '#ffffff');
+    g.addColorStop(solid, '#ffffff');
+    g.addColorStop(1, '#000000');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 128, 128);
+    const tex = new THREE.CanvasTexture(c);
+    softtex.set(solid, tex);
+    return tex;
+  }
+
+  function feltcolor(info) {
+    const m = info.material;
+    const out = m.color ? m.color.clone() : new THREE.Color(1, 1, 1);
+    const img = m.map?.image;
+    if (!img || !img.width) return out;
+    try {
+      const c = document.createElement('canvas');
+      c.width = c.height = 16;
+      const g = c.getContext('2d');
+      const frac = (v) => v - Math.floor(v);
+      const u = frac(info.uv.x) * img.width;
+      const v = (m.map.flipY ? 1 - frac(info.uv.y) : frac(info.uv.y)) * img.height;
+      const span = Math.max(8, Math.min(img.width, img.height) * 0.08);
+      g.drawImage(img, u - span / 2, v - span / 2, span, span, 0, 0, 16, 16);
+      const d = g.getImageData(0, 0, 16, 16).data;
+      let r = 0, gg = 0, b = 0, n = 0;
+      for (let k = 0; k < d.length; k += 4) {
+        if (d[k + 3] < 10) continue;
+        r += d[k]; gg += d[k + 1]; b += d[k + 2]; n += 1;
+      }
+      if (n) out.multiply(new THREE.Color().setRGB(r / n / 255, gg / n / 255, b / n / 255, THREE.SRGBColorSpace));
+    } catch {}
+    return out;
   }
 
   async function loadtablemodel() {
@@ -447,15 +467,6 @@
 
       const group = gltf.scene;
 
-      // the source file's tabletop ("Cube") has its material assigned, but
-      // its leg mesh ("Cylinder") does not, so it renders untextured; copy
-      // the tabletop's material onto it. despite the name and the node's
-      // position looking like a single corner leg, the mesh's own vertex
-      // data (accessor bounds ~[-1,-1,-1] to [33.4,1,16.6] in local space)
-      // already spans the full table footprint once its node scale/
-      // translation are applied, i.e. it's all the legs in one mesh with
-      // an off-center pivot, so it must NOT be cloned/mirrored to other
-      // corners, that would quadruple already-complete geometry.
       const tabletopmesh = group.getObjectByName('Cube');
       const legmesh = group.getObjectByName('Cylinder');
       if (tabletopmesh && legmesh) {
@@ -464,11 +475,6 @@
         note('table model missing expected Cube/Cylinder nodes, using as-is');
       }
 
-      // fit the model so its PLAYABLE area (not its outer box) equals
-      // tablex x tablez, so the model's own pocket openings land exactly on
-      // pocketpositions() and the rail colliders. the outer box is therefore
-      // fitted to the larger play/frac size, with the wooden border
-      // overhanging outside the play area as it should.
       const outerx = tablex / modelplayfracx;
       const outerz = tablez / modelplayfracz;
 
@@ -483,20 +489,23 @@
       group.scale.set(scalex, scaley, scalez);
       group.updateMatrixWorld(true);
 
-      // center horizontally, and drop it so the tabletop's top surface sits
-      // at y=0, matching the height the ball physics/felt plane use
       const box = new THREE.Box3().setFromObject(group);
       const center = box.getCenter(new THREE.Vector3());
       group.position.x -= center.x;
       group.position.z -= center.z;
       group.position.y -= box.max.y;
+
       group.updateMatrixWorld(true);
 
-      // the floor plane's height is normally tuned for the stock rail
-      // height; the loaded model's legs reach further down than that and
-      // were clipping through it, so use the model's real lowest point
       const finalbox = new THREE.Box3().setFromObject(group);
       floory = finalbox.min.y - 0.05;
+
+      const ray = new THREE.Raycaster(new THREE.Vector3(0, 300, 0), new THREE.Vector3(0, -1, 0));
+      const hit = ray.intersectObject(group, true)[0];
+      if (hit?.uv) {
+        const mats = Array.isArray(hit.object.material) ? hit.object.material : [hit.object.material];
+        feltinfo = { material: mats[hit.face?.materialIndex ?? 0] || mats[0], uv: hit.uv.clone() };
+      }
 
       scene.add(group);
       group.traverse(o => { if (o.isMesh && o.material) saturatematerial(o.material); });
@@ -510,7 +519,6 @@
     }
   }
 
-  // shared GLSL helper: pulls colour away from its luminance to boost saturation
   const satglsl = `
     vec3 boostsat(vec3 c, float s) {
       float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
@@ -523,28 +531,28 @@
     material.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = uniforms.uTime;
       shader.uniforms.uActive = uniforms.uActive;
+      shader.uniforms.uAccent = accentu;
       shader.fragmentShader = shader.fragmentShader
         .replace(
           '#include <common>',
           `#include <common>
           uniform float uTime;
           uniform float uActive;
+          uniform vec3 uAccent;
           ${satglsl}`
         )
         .replace(
           '#include <dithering_fragment>',
           `#include <dithering_fragment>
           gl_FragColor.rgb = boostsat(gl_FragColor.rgb, ${satamount.toFixed(2)});
-          // the stripe is driven by gl_FragCoord (raw screen pixels) rather
-          // than the sphere's UVs, so it does not wrap around the surface -
-          // it reads as a flat 2d pattern projected over the ball, and stays
-          // the same on-screen width regardless of the ball's curvature
           if (uActive > 0.5) {
+            float luma = dot(gl_FragColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+            gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(luma), ${graymix.toFixed(2)}) * ${graydim.toFixed(2)};
             float ang = 0.7;
             float coord = gl_FragCoord.x * cos(ang) - gl_FragCoord.y * sin(ang);
             float stripe = fract((coord + uTime * 34.0) / ${stripepx.toFixed(1)});
-            float mask = smoothstep(0.38, 0.5, stripe) - smoothstep(0.5, 0.62, stripe);
-            gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.82, 0.15), mask * 0.7);
+            float mask = smoothstep(0.3, 0.45, stripe) - smoothstep(0.55, 0.7, stripe);
+            gl_FragColor.rgb = mix(gl_FragColor.rgb, uAccent, mask * 0.7);
           }`
         );
     };
@@ -552,7 +560,6 @@
     return material;
   }
 
-  // saturation-only variant, for materials that get no stripe overlay
   function saturatematerial(material) {
     material.onBeforeCompile = (shader) => {
       shader.fragmentShader = shader.fragmentShader
@@ -583,10 +590,7 @@
   }
 
   function makecue() {
-    // verified empirically against the actual vendored three.js: after
-    // group.lookAt(ball), local NEGATIVE z is the side that recedes from the
-    // ball as pullback grows, so the tip (near the ball) and shaft (further
-    // back) both sit on that side, at increasing negative offsets
+
     const group = new THREE.Group();
     const length = 7.5;
     const shaft = new THREE.Mesh(
@@ -629,6 +633,7 @@
   }
 
   let shadowtex = null;
+
   function shadowtexture(THREE) {
     if (shadowtex) return shadowtex;
     const c = document.createElement('canvas');
@@ -652,8 +657,6 @@
     );
     scene.add(mesh);
 
-    // not real ambient occlusion (that needs a screen-space post-process pass);
-    // this is a soft blob under each ball as a cheap stand-in for a contact shadow
     const shadow = new THREE.Mesh(
       new THREE.PlaneGeometry(ballr * 2.6, ballr * 2.6),
       new THREE.MeshBasicMaterial({ map: shadowtexture(THREE), transparent: true, depthWrite: false })
@@ -685,83 +688,105 @@
     makeball(0, 0, tablez * 0.22);
   }
 
-  // ---- ui ----
-
-  function avatarchip(id) {
-    const info = window.party.infofor(id);
+  function faceel(id) {
+    const info = window.party.infofor(id) || {};
     const el = document.createElement('div');
-    el.style.width = '34px';
-    el.style.height = '34px';
-    el.style.borderRadius = '50%';
-    el.style.backgroundSize = 'cover';
-    el.style.backgroundPosition = 'center';
-    el.style.border = `2px solid ${window.party.colorfor(id)}`;
-    el.style.boxShadow = '0 2px 0 rgba(0,0,0,.6)';
-    el.style.backgroundColor = '#333';
+    el.className = 'gm-face';
+    el.style.borderColor = window.party.colorfor(id);
     if (info.avatar) el.style.backgroundImage = `url('${info.avatar}')`;
+    el.title = info.name || id;
     return el;
+  }
+
+
+  function namesof(team) {
+    return teams[team].map(id => id === myid ? 'you' : (window.party.infofor(id)?.name || id)).join(' + ') || 'empty';
+  }
+
+  function teamplate(side) {
+    const plate = document.createElement('div');
+    plate.className = `gm-panel gm-team ${side === 'a' ? 'left' : 'right'}`;
+
+    const faces = document.createElement('div');
+    faces.className = 'gm-faces';
+
+    const info = document.createElement('div');
+    info.className = 'gm-teaminfo';
+    const name = document.createElement('span');
+    name.className = 'gm-teamname';
+    const group = document.createElement('span');
+    group.className = 'gm-group';
+    info.append(name, group);
+
+    const tray = document.createElement('div');
+    tray.className = 'gm-tray';
+
+    plate.append(faces, info, tray);
+    return { plate, faces, name, group, tray };
   }
 
   function makehud() {
     hud = document.createElement('div');
-    hud.style.cssText = [
-      'position:absolute', 'left:0', 'right:0', 'top:18px', 'z-index:202',
-      'display:flex', 'flex-direction:column', 'align-items:center', 'gap:10px',
-      'pointer-events:none', "font-family:'Silkscreen','Consolas',monospace"
-    ].join(';');
+    hud.className = 'gm-top';
 
-    scorebar = document.createElement('div');
-    scorebar.style.cssText = [
-      'display:flex', 'align-items:center', 'gap:20px',
-      'background:rgba(8,8,8,.75)', 'border:2px solid rgba(255,255,255,.15)',
-      'border-radius:10px', 'padding:10px 22px'
-    ].join(';');
+    teamleftbox = teamplate('a');
+    teamrightbox = teamplate('b');
 
-    teamleftbox = document.createElement('div');
-    teamleftbox.style.cssText = 'display:flex;align-items:center;gap:5px;padding:5px 9px;border-radius:6px;';
-
+    const turn = document.createElement('div');
+    turn.className = 'gm-panel gm-turnbox';
     scoretext = document.createElement('div');
-    scoretext.style.cssText = [
-      'font-size:22px', 'color:#fff', 'text-shadow:0 2px 0 #000',
-      'min-width:100px', 'text-align:center', 'transition:color .3s'
-    ].join(';');
-
-    teamrightbox = document.createElement('div');
-    teamrightbox.style.cssText = 'display:flex;align-items:center;gap:5px;padding:5px 9px;border-radius:6px;';
-
-    scorebar.append(teamleftbox, scoretext, teamrightbox);
-
+    scoretext.className = 'gm-turnlabel';
     subline = document.createElement('div');
-    subline.style.cssText = 'font-size:14px;color:#fff;text-shadow:0 2px 0 #000;text-align:center;';
+    subline.className = 'gm-turnsub';
+    turn.append(scoretext, subline);
 
-    hud.append(scorebar, subline);
-
-    winbanner = document.createElement('div');
-    winbanner.style.cssText = [
-      'position:absolute', 'left:50%', 'top:38%', 'transform:translate(-50%,-50%) scale(0.3)',
-      'z-index:246', "font-family:'Silkscreen','Consolas',monospace",
-      'font-size:62px', 'font-weight:700', 'color:#5fe38a',
-      '-webkit-text-stroke:8px #000', 'paint-order:stroke fill',
-      'text-align:center', 'opacity:0', 'pointer-events:none', 'white-space:nowrap'
-    ].join(';');
-    document.body.appendChild(winbanner);
+    hud.append(teamleftbox.plate, turn, teamrightbox.plate);
     document.body.appendChild(hud);
 
     closebtn = document.createElement('button');
-    closebtn.className = 'interactive';
+    closebtn.className = 'gm-btn gm-close interactive';
     closebtn.title = 'Close for everyone';
-    closebtn.innerHTML =
-      '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l12 12M16 4L4 16"/></svg>';
-    closebtn.style.cssText = [
-      'position:absolute', 'top:18px', 'right:22px', 'z-index:203',
-      'width:46px', 'height:46px', 'border:2px solid rgba(255,255,255,.25)',
-      'border-radius:6px', 'background:rgba(8,8,8,.75)', 'color:#fff',
-      'cursor:pointer', 'display:grid', 'place-items:center'
-    ].join(';');
-    closebtn.addEventListener('mouseenter', () => { closebtn.style.background = 'rgba(255,60,60,.55)'; });
-    closebtn.addEventListener('mouseleave', () => { closebtn.style.background = 'rgba(8,8,8,.75)'; });
-    closebtn.addEventListener('click', () => close(true));
+    closebtn.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M4 4l12 12M16 4L4 16"/></svg><span>close</span>';
+    let armed = null;
+    closebtn.addEventListener('click', () => {
+      if (armed) {
+        clearTimeout(armed);
+        armed = null;
+        close(true);
+        return;
+      }
+      closebtn.classList.add('armed');
+      closebtn.querySelector('span').textContent = 'sure?';
+      armed = setTimeout(() => {
+        armed = null;
+        closebtn?.classList.remove('armed');
+        if (closebtn) closebtn.querySelector('span').textContent = 'close';
+      }, 2400);
+    });
     document.body.appendChild(closebtn);
+
+    winbanner = document.createElement('div');
+    winbanner.className = 'gm-panel gm-win interactive hidden';
+    const title = document.createElement('div');
+    title.className = 'gm-wintitle';
+    const sub = document.createElement('div');
+    sub.className = 'gm-winsub';
+    const row = document.createElement('div');
+    row.className = 'gm-row';
+    const again = document.createElement('button');
+    again.className = 'gm-btn go';
+    again.textContent = 'Rematch';
+    again.addEventListener('click', () => {
+      window.party?.broadcast({ t: 'poolrematch' });
+      rematch();
+    });
+    const leave = document.createElement('button');
+    leave.className = 'gm-btn';
+    leave.textContent = 'Close table';
+    leave.addEventListener('click', () => close(true));
+    row.append(again, leave);
+    winbanner.append(title, sub, row);
+    document.body.appendChild(winbanner);
   }
 
   function ballsleft(type) {
@@ -770,78 +795,143 @@
     return nums.filter(n => balls.has(n) && !balls.get(n).potted).length;
   }
 
-  function highlightbox(box, on) {
-    box.style.background = on ? 'rgba(255,255,255,.14)' : 'transparent';
-    box.style.boxShadow = on ? '0 0 0 2px rgba(255,255,255,.4) inset' : 'none';
+  function filltray(tray, type) {
+    tray.innerHTML = '';
+    const nums = type === 'solids' ? [1, 2, 3, 4, 5, 6, 7] : type === 'stripes' ? [9, 10, 11, 12, 13, 14, 15] : [];
+    if (!nums.length) {
+      for (let k = 0; k < 7; k++) {
+        const b = document.createElement('span');
+        b.className = 'gm-ball open';
+        tray.appendChild(b);
+      }
+      return;
+    }
+    nums.forEach(n => {
+      const spec = ballspecs[n];
+      const b = document.createElement('span');
+      b.className = `gm-ball${spec.stripe ? ' stripe' : ''}${balls.get(n)?.potted ? ' gone' : ''}`;
+      b.style.setProperty('--ball', spec.color);
+      b.textContent = String(n);
+      tray.appendChild(b);
+    });
+  }
+
+  function setplate(t, team) {
+    t.faces.innerHTML = '';
+    teams[team].forEach(id => t.faces.appendChild(faceel(id)));
+    t.name.textContent = namesof(team);
+    const type = assign[team];
+    t.group.textContent = type ? type : 'open table';
+    t.group.dataset.type = type || 'open';
+    filltray(t.tray, type);
   }
 
   function refreshhud() {
     if (!hud) return;
 
-    teamleftbox.innerHTML = '';
-    teamrightbox.innerHTML = '';
-    teams.a.forEach(id => teamleftbox.appendChild(avatarchip(id)));
-    teams.b.forEach(id => teamrightbox.appendChild(avatarchip(id)));
+    setplate(teamleftbox, 'a');
+    setplate(teamrightbox, 'b');
 
     const cur = order[turnidx];
     const curteam = teamof(cur);
     const wteam = winner ? teamof(winner) : null;
-
-    highlightbox(teamleftbox, wteam ? wteam === 'a' : curteam === 'a');
-    highlightbox(teamrightbox, wteam ? wteam === 'b' : curteam === 'b');
-
-    if ((wteam || curteam) && (wteam || curteam) !== lastturnteam) {
-      lastturnteam = wteam || curteam;
-      const box = lastturnteam === 'a' ? teamleftbox : teamrightbox;
-      box.animate(
-        [{ transform: 'scale(1)' }, { transform: 'scale(1.12)' }, { transform: 'scale(1)' }],
-        { duration: 340, easing: 'ease-out' }
-      );
-    }
-
-    scoretext.textContent = `${ballsleft(assign.a)} - ${ballsleft(assign.b)}`;
-    scoretext.style.color = winner ? '#23d18b' : '#fff';
-
-    const label = (t) => (t === null ? 'unassigned' : t);
     const mine = teamof(myid);
-    const mylabel = mine === 'a' ? label(assign.a) : mine === 'b' ? label(assign.b) : '';
 
-    if (winner) {
-      subline.textContent = winner === myid
-        ? 'You win!'
-        : (teamof(myid) === wteam ? 'Your team wins!' : `${window.party.infofor(winner).name}'s team wins`);
-    } else {
-      const whose = cur === myid ? 'Your shot' : `${window.party.infofor(cur).name}'s shot`;
-      if (ballinhand && cur === myid) {
-        subline.textContent = 'BALL IN HAND  ·  move the cue ball, click to place';
-        subline.style.color = '#ffc23b';
-      } else {
-        const hand = ballinhand ? ' — placing the cue ball' : '';
-        subline.style.color = '#fff';
-        subline.textContent = mylabel ? `${whose}${hand}  ·  you have ${mylabel}` : `${whose}${hand}`;
-      }
+    teamleftbox.plate.classList.toggle('active', wteam ? wteam === 'a' : curteam === 'a');
+    teamrightbox.plate.classList.toggle('active', wteam ? wteam === 'b' : curteam === 'b');
+    teamleftbox.plate.classList.toggle('mine', mine === 'a');
+    teamrightbox.plate.classList.toggle('mine', mine === 'b');
+
+    const now = wteam || curteam;
+    if (now && now !== lastturnteam) {
+      lastturnteam = now;
+      const box = now === 'a' ? teamleftbox.plate : teamrightbox.plate;
+      box.animate(
+        [{ transform: 'translateY(0)' }, { transform: 'translateY(4px)' }, { transform: 'translateY(0)' }],
+        { duration: 260, easing: 'steps(3, end)' }
+      );
+      if (cur === myid && !winner && !over) turnchime();
     }
 
-    if (winner && !celebrated) {
+    const who = cur === myid ? 'your' : `${window.party.infofor(cur)?.name || cur}'s`;
+    const mytype = mine ? assign[mine] : null;
+
+    if (winner || over) {
+      scoretext.textContent = 'game over';
+      subline.textContent = winner ? `${namesof(wteam)} won` : 'no winner';
+    } else {
+      scoretext.textContent = `${who} shot`;
+      scoretext.dataset.mine = cur === myid ? '1' : '';
+      if (moving) subline.textContent = 'balls rolling';
+      else if (ballinhand) subline.textContent = 'ball in hand';
+      else subline.textContent = mytype ? `you have ${mytype}` : 'table is open';
+    }
+
+    if ((winner || over) && !celebrated) {
       celebrated = true;
-      const mywin = teamof(myid) === wteam;
-      winbanner.textContent = winner === myid ? 'YOU WIN!' : mywin ? 'YOUR TEAM WINS!' : 'YOU LOSE';
-      winbanner.style.color = mywin || winner === myid ? '#5fe38a' : '#ff5c57';
+      const mywin = winner && teamof(myid) === wteam;
+      winbanner.classList.remove('hidden');
+      winbanner.dataset.tone = mywin ? 'go' : 'bad';
+      winbanner.querySelector('.gm-wintitle').textContent = winner ? (mywin ? 'you win!' : 'you lose') : 'game over';
+      winbanner.querySelector('.gm-winsub').textContent = winner ? (mywin ? 'now brag to your friend' : `${namesof(wteam)} sank the 8`) : '';
       winbanner.animate(
         [
-          { transform: 'translate(-50%,-50%) scale(0.3)', opacity: 0 },
-          { transform: 'translate(-50%,-50%) scale(1.25)', opacity: 1, offset: 0.55 },
-          { transform: 'translate(-50%,-50%) scale(1)', opacity: 1 }
+          { transform: 'translate(-50%, -50%) scale(0.4)', opacity: 0 },
+          { transform: 'translate(-50%, -50%) scale(1.08)', opacity: 1, offset: 0.6 },
+          { transform: 'translate(-50%, -50%) scale(1)', opacity: 1 }
         ],
-        { duration: 480, easing: 'cubic-bezier(.22,1.4,.4,1)', fill: 'forwards' }
+        { duration: 420, easing: 'cubic-bezier(.22,1.4,.4,1)', fill: 'forwards' }
       );
-      if (mywin || winner === myid) {
+      if (mywin) {
         confetti(window.innerWidth * 0.3, window.innerHeight * 0.25, 70);
         confetti(window.innerWidth * 0.7, window.innerHeight * 0.25, 70);
       }
     }
-    if (!winner) celebrated = false;
+    if (!winner && !over) {
+      celebrated = false;
+      winbanner.classList.add('hidden');
+    }
     updateballhighlights();
+  }
+
+
+  function turnchime() {
+    const ctx = ensureaudio();
+    if (!ctx) return;
+    [660, 990].forEach((f, i) => {
+      const osc = ctx.createOscillator();
+      osc.type = 'square';
+      osc.frequency.value = f;
+      const g = ctx.createGain();
+      const t0 = ctx.currentTime + i * 0.08;
+      g.gain.setValueAtTime(0, t0);
+      g.gain.linearRampToValueAtTime(0.05, t0 + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0005, t0 + 0.18);
+      osc.connect(g).connect(ctx.destination);
+      osc.start(t0);
+      osc.stop(t0 + 0.2);
+    });
+  }
+
+  function rematch() {
+    if (!open || !world) return;
+    balls.forEach(b => {
+      scene.remove(b.mesh);
+      scene.remove(b.shadow);
+      b.mesh.geometry.dispose();
+      b.mesh.material.map?.dispose();
+      b.mesh.material.dispose();
+      b.shadow.geometry.dispose();
+      b.shadow.material.dispose();
+      bycollider.delete(b.collider.handle);
+      if (!b.gone) { try { world.removeRigidBody(b.body); } catch {} }
+    });
+    balls.clear();
+    racksetup();
+    assignteams();
+    celebrated = false;
+    lastturnteam = null;
+    refreshhud();
   }
 
   function buildtrajectory() {
@@ -855,16 +945,12 @@
     document.body.appendChild(trajsvg);
 
     powermeter = document.createElement('div');
-    powermeter.style.cssText = [
-      'position:absolute', 'left:0', 'top:0', 'z-index:201',
-      'width:90px', 'height:12px', 'border:2px solid rgba(255,255,255,.5)',
-      'background:rgba(0,0,0,.5)', 'transform:translate(-50%,-50%)',
-      'opacity:0', 'pointer-events:none'
-    ].join(';');
+    powermeter.className = 'gm-power';
     powerfill = document.createElement('div');
-    powerfill.style.cssText = 'height:100%;width:0%;background:#ffd400;';
+    powerfill.className = 'gm-powerfill';
     powermeter.appendChild(powerfill);
     document.body.appendChild(powermeter);
+    hidetraj();
   }
 
   function mktrajline() {
@@ -876,6 +962,13 @@
     return l;
   }
 
+
+  function hidetraj() {
+    trajline?.setAttribute('opacity', '0');
+    trajline2?.setAttribute('opacity', '0');
+    if (powermeter) powermeter.style.opacity = '0';
+  }
+
   function project(vec3) {
     const v = vec3.clone().project(camera);
     return {
@@ -883,8 +976,6 @@
       y: (-v.y * 0.5 + 0.5) * window.innerHeight
     };
   }
-
-  // ---- curtain transition (same pattern as theater) ----
 
   function buildcurtains() {
     curtains = document.createElement('div');
@@ -894,15 +985,6 @@
       '<div class="curtain curtainright"></div>';
     document.body.appendChild(curtains);
   }
-
-  // ---- aiming ----
-  //
-  // aim direction is derived by raycasting the mouse onto the table plane and
-  // pointing from the cue ball to that world point, then negated for the shot
-  // (drag away from the ball, ball goes the opposite way, like pulling back a
-  // bow). this is done entirely in world space so it stays correct no matter
-  // which way the camera is actually facing, instead of assuming a fixed
-  // mapping between screen axes and world axes
 
   function screenpoint(clientx, clienty) {
     const nx = (clientx / window.innerWidth) * 2 - 1;
@@ -982,15 +1064,13 @@
     if (ballinhand) {
       const hit = screenpoint(e.clientX, e.clientY);
       if (!hit) return;
-      const x = Math.max(-tablex / 2 + ballr, Math.min(tablex / 2 - ballr, hit.x));
-      const z = Math.max(-tablez / 2 + ballr, Math.min(tablez / 2 - ballr, hit.z));
-      cue.body.setTranslation({ x, y: ballr, z }, true);
-      cue.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
-      cue.lastx = x;
-      cue.lastz = z;
+      const spot = clampspot(hit.x, hit.z);
+      const x = clearspot(spot.x, spot.z) ? spot.x : cue.body.translation().x;
+      const z = clearspot(spot.x, spot.z) ? spot.z : cue.body.translation().z;
+      setcue(x, z);
       ballinhand = false;
       if (placering) placering.visible = false;
-      broadcaststate();
+      window.party?.broadcast({ t: 'poolplace', x, z });
       refreshhud();
       return;
     }
@@ -1046,19 +1126,17 @@
       cuestick.position.x, ballr, cuestick.position.z
     ));
     powermeter.style.left = `${meterpos.x.toFixed(1)}px`;
-    powermeter.style.top = `${(meterpos.y - 28).toFixed(1)}px`;
+    powermeter.style.top = `${(meterpos.y - 34).toFixed(1)}px`;
     powermeter.style.opacity = '1';
     powerfill.style.width = `${(aimpower * 100).toFixed(0)}%`;
-    powerfill.style.background = aimpower > 0.75 ? '#ff3b3b' : aimpower > 0.4 ? '#ffd400' : '#5fe38a';
+    powerfill.dataset.level = aimpower > 0.75 ? 'hot' : aimpower > 0.4 ? 'mid' : 'low';
   }
 
   function releaseaim() {
     if (!aiming) return;
     aiming = false;
     cuestick.visible = false;
-    trajline.setAttribute('opacity', '0');
-    trajline2.setAttribute('opacity', '0');
-    powermeter.style.opacity = '0';
+    hidetraj();
 
     if (aimpower < 0.04) return;
 
@@ -1070,14 +1148,44 @@
     takeshot();
   }
 
+  function clampspot(x, z) {
+    return {
+      x: Math.max(-tablex / 2 + ballr, Math.min(tablex / 2 - ballr, x)),
+      z: Math.max(-tablez / 2 + ballr, Math.min(tablez / 2 - ballr, z))
+    };
+  }
+
+
+  function clearspot(x, z) {
+    const gap = ballr * 2.04;
+    for (const b of balls.values()) {
+      if (b.number === 0 || b.potted) continue;
+      const p = b.body.translation();
+      if (Math.hypot(p.x - x, p.z - z) < gap) return false;
+    }
+    return true;
+  }
+
+  function setcue(x, z) {
+    const cue = balls.get(0);
+    if (!cue || cue.potted) return;
+    cue.body.setTranslation({ x, y: ballr, z }, true);
+    cue.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    cue.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    cue.lastx = x;
+    cue.lastz = z;
+    cue.mesh.position.set(x, ballr, z);
+    cue.shadow.position.x = x;
+    cue.shadow.position.z = z;
+  }
+
   function takeshot() {
     shooter = myid;
     moving = true;
     potthisshot = [];
     window.party?.broadcast({ t: 'poolshot' });
+    refreshhud();
   }
-
-  // ---- game flow ----
 
   function groupcleared(type) {
     const nums = type === 'solids' ? [1, 2, 3, 4, 5, 6, 7] : [9, 10, 11, 12, 13, 14, 15];
@@ -1089,6 +1197,7 @@
   }
 
   function resolveshot() {
+    broadcaststate();
     moving = false;
 
     const cuescratched = potthisshot.includes(0);
@@ -1120,7 +1229,9 @@
     let handnext = false;
 
     if (losenow) {
-      winner = order.find(id => teamof(id) !== teamof(myid));
+      const opponent = order.find(id => teamof(id) !== teamof(myid));
+      if (opponent) winner = opponent;
+      else over = true;
     } else if (wonow) {
       winner = myid;
     } else if (cuescratched) {
@@ -1135,55 +1246,81 @@
       turnidx: nextidx,
       ballinhand: handnext,
       assign,
-      winner
+      winner,
+      over,
+      potted: potthisshot
     });
 
     turnidx = nextidx;
     ballinhand = handnext;
-    refreshhud();
+    shooter = null;
+    potthisshot = [];
 
     if (cuescratched) respawncue();
+    refreshhud();
+  }
+
+  function freespot() {
+    const basez = tablez * 0.22;
+    for (let ring = 0; ring < 12; ring++) {
+      for (let k = 0; k < 8; k++) {
+        const a = (k / 8) * Math.PI * 2;
+        const r = ring * ballr * 1.2;
+        const spot = clampspot(Math.cos(a) * r, basez + Math.sin(a) * r);
+        if (clearspot(spot.x, spot.z)) return spot;
+        if (ring === 0) break;
+      }
+    }
+    return { x: 0, z: basez };
   }
 
   function respawncue() {
     const cue = balls.get(0);
     if (!cue) return;
-    cue.lastx = 0;
-    cue.lastz = tablez * 0.22;
+
+    const spot = freespot();
+    handx = spot.x;
+    handz = spot.z;
+    cue.lastx = spot.x;
+    cue.lastz = spot.z;
     if (cue.potted) {
       cue.potted = false;
       cue.mesh.visible = true;
       cue.mesh.scale.setScalar(1);
+      cue.mesh.position.set(spot.x, ballr, spot.z);
       cue.shadow.visible = true;
       cue.shadow.material.opacity = 1;
+      bycollider.delete(cue.collider.handle);
       world.removeRigidBody(cue.body);
-      const { body, collider } = ballbody(0, tablez * 0.22);
+      const { body, collider } = ballbody(spot.x, spot.z);
       cue.body = body;
       cue.collider = collider;
       bycollider.set(collider.handle, { kind: 'ball', ball: cue });
     } else {
-      cue.body.setTranslation({ x: 0, y: ballr, z: tablez * 0.22 }, true);
-      cue.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      setcue(spot.x, spot.z);
     }
   }
 
   function potball(b) {
     if (b.potted) return;
     b.potted = true;
-    potthisshot.push(b.number);
+    if (shooter === myid) potthisshot.push(b.number);
     pocketdrop();
+    refreshhud();
     const start = performance.now();
     const y0 = b.mesh.position.y;
     const anim = () => {
+      if (!b.potted) return;
       const t = Math.min(1, (performance.now() - start) / potdropms);
       b.mesh.position.y = y0 - t * 1.4;
       b.mesh.scale.setScalar(1 - t);
       b.shadow.material.opacity = 1 - t;
       if (t < 1) requestAnimationFrame(anim);
-      else {
+      else if (b.potted) {
         b.mesh.visible = false;
         b.shadow.visible = false;
-        if (b.number !== 0) {
+        if (b.number !== 0 && world) {
+          b.gone = true;
           world.removeRigidBody(b.body);
           bycollider.delete(b.collider.handle);
         }
@@ -1194,25 +1331,36 @@
 
   function broadcaststate() {
     const list = [];
+    const gone = [];
     balls.forEach(b => {
-      if (b.potted) return;
+      if (b.potted) { gone.push(b.number); return; }
       const p = b.body.translation();
       const v = b.body.linvel();
       list.push({ n: b.number, x: p.x, z: p.z, vx: v.x, vz: v.z });
     });
-    window.party?.broadcast({ t: 'poolstate', balls: list });
+    window.party?.broadcast({ t: 'poolstate', balls: list, potted: gone });
   }
 
-  // ---- tick ----
-
   let lastshare = 0;
+
+  let handx = 0, handz = tablez * 0.22;
   let lastmousex = 0, lastmousey = 0;
   let rollaxis = null, rollquat = null;
 
+  function paintaccent() {
+    const hex = window.party?.colorfor?.(myid) || '#23d18b';
+    if (hex === lastaccent) return;
+    lastaccent = hex;
+    accentu.value?.set(hex);
+    turnring?.material.color.set(hex);
+    placemat?.color.set(hex);
+  }
+
   function tick(now) {
-    if (!world) { requestAnimationFrame(tick); return; }
+    if (!open || !world) return;
 
     try {
+      paintaccent();
       world.step(eventqueue);
 
       eventqueue.drainCollisionEvents((h1, h2, started) => {
@@ -1248,20 +1396,10 @@
         b.shadow.position.x = p.x;
         b.shadow.position.z = p.z;
 
-        // roll is integrated straight from the distance the ball actually
-        // moved this frame, rather than by handing an angular velocity to the
-        // physics integrator and reading its rotation back. that indirection
-        // let damping and the fixed timestep desync the visible spin from the
-        // visible motion. rolling without slipping means the contact point is
-        // stationary, which gives rotation axis = up x displacement and
-        // angle = distance / radius (verified against real vector math - the
-        // earlier version had this axis inverted, so balls span backwards).
         const dx = p.x - b.lastx;
         const dz = p.z - b.lastz;
         const dist = Math.hypot(dx, dz);
-        // a large single-frame delta is a teleport (a network state sync, a
-        // cue respawn, ball-in-hand tracking), not rolling - spinning by
-        // distance/radius there would whip the ball around, so just re-anchor
+
         if (dist > 1e-6 && dist < maxrolldelta) {
           rollaxis.set(dz, 0, -dx).normalize();
           rollquat.setFromAxisAngle(rollaxis, dist / ballr);
@@ -1276,27 +1414,27 @@
 
       const cue = balls.get(0);
 
-      // ball in hand: the cue ball tracks the cursor directly so it is
-      // obvious it is being carried, instead of only teleporting on click
-      if (cue && !cue.potted && ballinhand && myturn()) {
-        const hit = screenpoint(lastmousex, lastmousey);
-        if (hit) {
-          const px = Math.max(-tablex / 2 + ballr, Math.min(tablex / 2 - ballr, hit.x));
-          const pz = Math.max(-tablez / 2 + ballr, Math.min(tablez / 2 - ballr, hit.z));
-          cue.body.setTranslation({ x: px, y: ballr, z: pz }, true);
-          cue.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
-          cue.lastx = px;
-          cue.lastz = pz;
+      if (cue && !cue.potted && ballinhand && !moving && !winner && !over) {
+        if (myturn()) {
+          const hit = screenpoint(lastmousex, lastmousey);
+          if (hit) {
+            const spot = clampspot(hit.x, hit.z);
+            if (clearspot(spot.x, spot.z)) setcue(spot.x, spot.z);
+          }
+
+          if (now - lastshare > broadcastms) {
+            lastshare = now;
+            const p = cue.body.translation();
+            window.party?.broadcast({ t: 'poolhand', x: p.x, z: p.z });
+          }
+        } else {
+          const p = cue.body.translation();
+          setcue(p.x + (handx - p.x) * 0.35, p.z + (handz - p.z) * 0.35);
         }
         placering.visible = true;
         placering.position.set(cue.mesh.position.x, 0.02, cue.mesh.position.z);
         const ppulse = 1 + Math.sin(now / 190) * 0.12;
         placering.scale.setScalar(ppulse);
-
-        if (now - lastshare > broadcastms) {
-          lastshare = now;
-          broadcaststate();
-        }
       } else if (placering) {
         placering.visible = false;
       }
@@ -1314,7 +1452,7 @@
         resolveshot();
       }
 
-      if (shooter === myid && now - lastshare > broadcastms) {
+      if (moving && shooter === myid && now - lastshare > broadcastms) {
         lastshare = now;
         broadcaststate();
       }
@@ -1329,8 +1467,6 @@
     requestAnimationFrame(tick);
   }
 
-  // ---- open / close ----
-
   function assignteams() {
     order = [me(), ...window.party.peers.keys()].filter(Boolean).sort();
     teams = { a: [], b: [] };
@@ -1338,7 +1474,14 @@
     turnidx = 0;
     assign = { a: null, b: null };
     winner = null;
+    over = false;
     ballinhand = false;
+    moving = false;
+    shooter = null;
+    aiming = false;
+    potthisshot = [];
+    handx = 0;
+    handz = tablez * 0.22;
   }
 
   function onmove(e) {
@@ -1352,7 +1495,6 @@
     note('pool open');
 
     window.menu?.close();
-    if (window.browser?.isopen?.()) window.browser.toggle();
     if (window.theater?.isopen?.()) window.theater.close();
 
     buildcurtains();
@@ -1365,7 +1507,7 @@
     root = document.createElement('div');
     root.id = 'pool-root';
     root.className = 'interactive';
-    root.style.cssText = 'position:fixed;inset:0;z-index:200;background:#050505;';
+    root.style.cssText = 'position:fixed;inset:0;z-index:200;background:radial-gradient(ellipse at 50% 55%, #17110e 0%, #080606 58%, #020202 100%);';
     document.body.appendChild(root);
 
     canvas = document.createElement('canvas');
@@ -1380,6 +1522,8 @@
     buildscene();
     world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     eventqueue = new RAPIER.EventQueue(true);
+    accentu.value = new THREE.Color(window.party?.colorfor?.(myid) || '#23d18b');
+    lastaccent = '';
     customtableloaded = await loadtablemodel();
     buildtable();
     racksetup();
@@ -1397,13 +1541,19 @@
       new THREE.RingGeometry(ballr * 2.1, ballr * 2.5, 40),
       new THREE.MeshBasicMaterial({ color: 0xffc23b, transparent: true, opacity: 0.9, side: THREE.DoubleSide })
     );
+    placemat = placeouter.material;
     placeouter.rotation.x = -Math.PI / 2;
     const placeinner = new THREE.Mesh(
       new THREE.RingGeometry(ballr * 1.15, ballr * 1.3, 32),
       new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, side: THREE.DoubleSide })
     );
     placeinner.rotation.x = -Math.PI / 2;
-    placering.add(placeouter, placeinner);
+    const placeghost = new THREE.Mesh(
+      new THREE.SphereGeometry(ballr, 24, 16),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4, depthWrite: false })
+    );
+    placeghost.position.y = ballr - 0.02;
+    placering.add(placeouter, placeinner, placeghost);
     placering.visible = false;
     scene.add(placering);
 
@@ -1449,16 +1599,27 @@
     balls.clear();
     bycollider.clear();
     world = null;
+    moving = false;
+    shooter = null;
+    ballinhand = false;
+    aiming = false;
+    renderer?.dispose();
+    renderer = null;
     eventqueue = null;
     tablemodel = null;
     customtableloaded = false;
+    feltinfo = null;
+    placemat = null;
     floory = -railh - 0.35;
 
     root?.remove(); root = null;
     hud?.remove(); hud = null;
     closebtn?.remove(); closebtn = null;
+    trajline = null;
+    trajline2 = null;
     winbanner?.remove(); winbanner = null;
     celebrated = false;
+    over = false;
     lastturnteam = null;
     trajsvg?.remove(); trajsvg = null;
     powermeter?.remove(); powermeter = null; powerfill = null;
@@ -1481,12 +1642,22 @@
   window.party?.onmessage((from, m) => {
     if (m.t === 'poolopen') enter();
     else if (m.t === 'poolclose') close(false);
+    else if (m.t === 'poolrematch') rematch();
+    else if (!open || !world) return;
     else if (m.t === 'poolshot') {
       shooter = from;
       moving = true;
+      ballinhand = false;
+      aiming = false;
+      if (cuestick) cuestick.visible = false;
+      refreshhud();
     }
     else if (m.t === 'poolstate') {
-      if (from !== shooter) return;
+      if (from !== authority()) return;
+      (m.potted || []).forEach(n => {
+        const b = balls.get(n);
+        if (b && !b.potted) potball(b);
+      });
       m.balls.forEach(bs => {
         const b = balls.get(bs.n);
         if (!b || b.potted) return;
@@ -1494,12 +1665,34 @@
         b.body.setLinvel({ x: bs.vx, y: 0, z: bs.vz }, true);
       });
     }
+    else if (m.t === 'poolhand') {
+      if (from !== authority() || !ballinhand) return;
+      handx = m.x;
+      handz = m.z;
+    }
+    else if (m.t === 'poolplace') {
+      if (from !== authority()) return;
+      handx = m.x;
+      handz = m.z;
+      setcue(m.x, m.z);
+      ballinhand = false;
+      if (placering) placering.visible = false;
+      refreshhud();
+    }
     else if (m.t === 'poolresolve') {
+      if (shooter && from !== shooter) return;
+      (m.potted || []).forEach(n => {
+        const b = balls.get(n);
+        if (b && !b.potted) potball(b);
+      });
+      moving = false;
+      shooter = null;
+      if ((m.potted || []).includes(0)) respawncue();
       turnidx = m.turnidx;
       ballinhand = m.ballinhand;
       assign = m.assign;
       winner = m.winner;
-      shooter = null;
+      over = m.over;
       refreshhud();
     }
   });
